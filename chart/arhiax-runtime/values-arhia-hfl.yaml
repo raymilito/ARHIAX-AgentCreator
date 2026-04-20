@@ -1,0 +1,194 @@
+# =============================================================================
+# ARHIAX Runtime — values-arhia-hfl.yaml
+# =============================================================================
+#
+# Pilot:    ARHIA HFL (High Frequency Logistics) — port last-mile arbitrage
+# Spec:     TR-2026-033 Phase3 §4 B12 port logistics + B06 cross-agent coord
+# Contact:  Sinergia Consulting Group S.A.S.
+#
+# Profile:
+#   - Shadow Pilot mode: all policy decisions are RECORDED but NOT ENFORCED.
+#     The ATK observes multi-agent coordination decisions made by the existing
+#     HFL scheduler and writes decisions to EGA for later comparison. This
+#     lets the HFL operator see what ARHIAX would have done without risking
+#     live arbitrage workflows.
+#   - Very low latency requirement: last-mile arbitrage windows are seconds;
+#     the ATK envelope overhead must be <20ms p99.
+#   - Single-tenant, high-throughput: ~150 concurrent agents, burst pattern
+#     tied to container gate-out events.
+#   - Observability-first: rich metrics, extended retention, delta dashboards
+#     comparing scheduler decisions vs ATK shadow decisions.
+#
+# Override pattern:
+#     helm install arhiax-hfl ./arhiax-runtime \
+#         -f values.yaml \
+#         -f values-arhia-hfl.yaml \
+#         --namespace arhiax-hfl \
+#         --create-namespace
+# =============================================================================
+
+global:
+  environment: production
+  pilot: arhia-hfl
+  region: co-caribbean
+  mode: shadow  # CRITICAL: shadow pilot
+
+image:
+  repository: sinergia/arhiax-atk
+  tag: "11.4-hfl"
+  pullPolicy: IfNotPresent
+
+replicaCount: 4
+
+# Light on CPU (shadow mode skips enforcement actions), heavier on memory
+# for decision buffering + delta computation
+resources:
+  atk:
+    requests:
+      cpu: 400m
+      memory: 1Gi
+    limits:
+      cpu: 1200m
+      memory: 2Gi
+  opa:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 400m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# ARHIAX mode: SHADOW — decisions recorded but not enforced
+# ---------------------------------------------------------------------------
+arhiax:
+  mode: shadow
+
+  shadow:
+    enabled: true
+    # In shadow mode, ALL outcomes (even DENY_WITH_INCIDENT) become ALLOW
+    # from the MCP interceptor's perspective. The original decision is still
+    # recorded in EGA under `shadowDecision` for delta analysis.
+    recordOriginalDecision: true
+    # Comparison mode: also record the upstream scheduler's decision for
+    # each envelope so we can compute delta metrics.
+    recordUpstreamDecision: true
+    deltaDashboardEnabled: true
+
+  # Latency budget: sub-20ms p99 envelope
+  performance:
+    envelopeTimeoutMs: 20
+    opaEvaluationTimeoutMs: 5
+    skipBBROnTimeout: true  # BBR soft-fail kicks in fast
+
+  clients:
+    aim:
+      url: "http://aim.arhiax-hfl.svc.cluster.local:8080"
+      tokenSecretRef:
+        name: arhiax-hfl-secrets
+        key: aim-token
+      timeoutSeconds: 2
+      maxRetries: 1  # fail fast, shadow mode tolerates misses
+    opa:
+      url: "http://127.0.0.1:8181"
+      timeoutSeconds: 1
+      maxRetries: 1
+    aut:
+      url: "http://aut.arhiax-hfl.svc.cluster.local:8080"
+      tokenSecretRef:
+        name: arhiax-hfl-secrets
+        key: aut-token
+      timeoutSeconds: 1
+    bbr:
+      url: "http://bbr.arhiax-hfl.svc.cluster.local:8080"
+      timeoutSeconds: 1
+      maxRetries: 0  # shadow mode: skip BBR entirely on any hiccup
+    ega:
+      # EGA gets heavier write load in shadow mode (upstream + shadow decisions)
+      url: "http://ega.arhiax-hfl.svc.cluster.local:8080"
+      tokenSecretRef:
+        name: arhiax-hfl-secrets
+        key: ega-token
+      timeoutSeconds: 5
+      maxRetries: 3
+    hic:
+      # In shadow mode, HIC is informational — no live escalations
+      url: "http://hic.arhiax-hfl.svc.cluster.local:8080"
+      timeoutSeconds: 3
+
+  # Shadow pilot focuses on coordination + port logistics bundles
+  bundles:
+    enabled:
+      - B01  # baseline envelope
+      - B02  # rate limits
+      - B06  # CROSS-AGENT COORDINATION — key bundle for HFL
+      - B09  # tool safety
+      - B11  # data residency
+      - B12  # PORT LOGISTICS — key bundle for HFL
+      - B14  # AIM identity
+      - B16  # AIM permissions
+      - B17  # audit trail
+    config:
+      B06:
+        shadowMode: true
+        strictTokenOverlap: false  # observe only
+      B12:
+        shadowMode: true
+        geofenceValidation: "observe"  # log deltas, don't enforce
+
+# ---------------------------------------------------------------------------
+# HPA: spiky but predictable
+# ---------------------------------------------------------------------------
+autoscaling:
+  enabled: true
+  minReplicas: 4
+  maxReplicas: 16
+  targetCPUUtilizationPercentage: 60
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 180
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+networkPolicy:
+  enabled: true
+  egress:
+    allowInternet: false
+    allowedNamespaces:
+      - arhiax-hfl
+      - kube-system
+      - monitoring
+
+ingress:
+  enabled: false  # HFL scheduler talks to ATK via internal service only
+
+# ---------------------------------------------------------------------------
+# Observability: shadow mode lives or dies by metrics quality
+# ---------------------------------------------------------------------------
+serviceMonitor:
+  enabled: true
+  interval: 5s  # very high frequency — shadow deltas change fast
+  labels:
+    release: prometheus-hfl
+
+grafana:
+  dashboard:
+    enabled: true
+    folder: "ARHIAX / HFL Shadow"
+    extraDashboards:
+      - name: shadow-vs-upstream-delta
+        description: "ARHIAX shadow decisions vs HFL scheduler decisions"
+      - name: envelope-latency-p99
+        description: "Sub-20ms p99 SLO tracking"
+      - name: b06-coordination-violations
+        description: "Would-have-blocked cross-agent coordination events"
+
+podLabels:
+  pilot: arhia-hfl
+  criticality: observation
+  shadow-mode: "true"
+  latency-sensitive: "true"

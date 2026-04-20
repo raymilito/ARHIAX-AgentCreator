@@ -1,0 +1,334 @@
+# =============================================================================
+# ARHIAX v11.4 Runtime — default values.yaml
+# =============================================================================
+#
+# This file documents every knob the chart exposes. Defaults are chosen to
+# produce a safe, restrictive, self-contained deployment out of the box.
+# Override in a site-specific values file (e.g., values-sprbun.yaml,
+# values-brasil-fintech.yaml) rather than editing this file.
+#
+# Related spec anchors:
+#   TR-2026-034-A §4  — 14 components, 36 controls
+#   TR-2026-034-ATK  — 5-check envelope, 6-outcome ladder, SLO table
+#   TR-2026-033 §4   — 19 OPA/Rego bundles
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Image configuration
+# -----------------------------------------------------------------------------
+image:
+  # Registry + repo + tag. Tag should match the appVersion in Chart.yaml for
+  # reproducible deploys. Override in CI with --set image.tag=<git-sha>.
+  registry: ghcr.io
+  repository: sinergia/arhiax-atk
+  tag: ""  # defaults to .Chart.appVersion if empty
+  pullPolicy: IfNotPresent
+  # List of pull secrets for private registries
+  pullSecrets: []
+  # - name: regcred
+
+# -----------------------------------------------------------------------------
+# Naming / labels
+# -----------------------------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+
+# Common labels applied to all resources. The arhiax.* labels are the
+# auditability anchors — please do not remove them.
+commonLabels:
+  arhiax.component: atk
+  arhiax.version: "11.4"
+  arhiax.spec: "TR-2026-034"
+
+commonAnnotations: {}
+
+# -----------------------------------------------------------------------------
+# Replica count and rollout strategy
+# -----------------------------------------------------------------------------
+replicaCount: 3
+
+# Rolling update ensures evidence chain continuity: maxUnavailable is kept at
+# 0 so there is always a quorum of ATK pods emitting evidence during rollouts.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+# -----------------------------------------------------------------------------
+# ATK main container (reference implementation)
+# -----------------------------------------------------------------------------
+atk:
+  # Port the ATK uvicorn server listens on (inside the container)
+  port: 8080
+
+  # Environment variables injected into the ATK container. The chart ships
+  # with safe defaults; backend URLs default to localhost (InMemory mode).
+  # Override these to point at real AIM/BBR/EGA/AUT/HIC services once the
+  # hardened production clients (Capa 4) are in place.
+  env:
+    ARHIAX_VERSION: "11.4"
+    ARHIAX_LOG_LEVEL: "INFO"
+    # Mode: "inmemory" uses the reference InMemory clients (dev/pilot).
+    # "production" expects AIM/BBR/EGA/AUT/HIC URLs to be set below.
+    ARHIAX_MODE: "inmemory"
+    # OPA sidecar endpoint (localhost — same pod)
+    ARHIAX_OPA_URL: "http://127.0.0.1:8181"
+    # Backend URLs (used only when ARHIAX_MODE=production)
+    ARHIAX_AIM_URL: ""
+    ARHIAX_BBR_URL: ""
+    ARHIAX_EGA_URL: ""
+    ARHIAX_AUT_URL: ""
+    ARHIAX_HIC_URL: ""
+
+  # Additional env from secrets (e.g., backend auth tokens)
+  envFromSecrets: []
+  # - secretName: arhiax-backend-creds
+  #   key: AIM_TOKEN
+  #   envVar: ARHIAX_AIM_TOKEN
+
+  # Resource requests/limits aligned with TR-2026-034-ATK §6 SLOs:
+  # p95 < 45ms envelope eval @ 3 req/s/pod steady state.
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "384Mi"
+    limits:
+      cpu: "1000m"
+      memory: "768Mi"
+
+  # Startup/liveness/readiness probes match the Dockerfile HEALTHCHECK.
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: 8080
+    failureThreshold: 30
+    periodSeconds: 2
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+# -----------------------------------------------------------------------------
+# OPA sidecar
+# -----------------------------------------------------------------------------
+# The chart ships an OPA sidecar in the same pod as ATK. This minimises
+# policy-evaluation latency (localhost-only traffic) and keeps the trust
+# domain small: one pod = one governed agent decision context.
+#
+# Bundles are loaded from a ConfigMap mounted at /policies inside the sidecar.
+# To update bundles, roll out a new chart version — do NOT hot-reload in
+# place, because that would invalidate the EGA evidence chain integrity
+# (OPA-C02: policy version must be captured in each evidence record).
+# -----------------------------------------------------------------------------
+opa:
+  enabled: true
+
+  image:
+    registry: docker.io
+    repository: openpolicyagent/opa
+    tag: "0.70.0-rootless"
+    pullPolicy: IfNotPresent
+
+  port: 8181
+
+  # Log level: "info" for production, "debug" for troubleshooting (verbose).
+  # "error" is acceptable for steady-state but hides deny-reason diagnostics.
+  logLevel: "info"
+
+  # Decision logging. Sending decisions to an external sink is STRONGLY
+  # recommended for EGA-C01 compliance (evidence generation).
+  decisionLogs:
+    enabled: false
+    service:
+      url: ""   # e.g., "https://ega.sinergia.internal/decisions"
+      credentials:
+        bearer:
+          tokenSecret: ""  # name of secret containing the bearer token
+          tokenKey: "token"
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  # Additional CLI flags passed to `opa run` (keep the list tight)
+  extraArgs: []
+
+# -----------------------------------------------------------------------------
+# Service + Ingress
+# -----------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    # nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+  hosts:
+    - host: arhiax-atk.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: arhiax-atk-tls
+  #   hosts:
+  #     - arhiax-atk.example.com
+
+# -----------------------------------------------------------------------------
+# Autoscaling
+# -----------------------------------------------------------------------------
+autoscaling:
+  enabled: false
+  minReplicas: 3
+  maxReplicas: 12
+  # Targets based on TR-2026-034-ATK §6: ATK is CPU-bound at steady state.
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  # Scale-down stabilisation prevents thrashing in bursty workloads (common
+  # in agent systems where bursts correlate with upstream model quotas).
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+
+# -----------------------------------------------------------------------------
+# Pod scheduling
+# -----------------------------------------------------------------------------
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# Pod Disruption Budget: ensure a minimum quorum remains during voluntary
+# disruptions (node drains, cluster upgrades).
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# -----------------------------------------------------------------------------
+# Security context — restricted Pod Security Standard baseline
+# -----------------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+
+# -----------------------------------------------------------------------------
+# Service account
+# -----------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automount: false  # ATK does not call the k8s API; no token needed.
+
+# -----------------------------------------------------------------------------
+# Network Policy
+# -----------------------------------------------------------------------------
+# Default is restrictive: deny all egress except DNS and the named backend
+# services. Ingress is allowed from the Ingress controller namespace and
+# from Prometheus for metrics scraping.
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  ingress:
+    # Allow traffic from Ingress controller
+    fromIngressController:
+      enabled: true
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    # Allow traffic from Prometheus for scraping metrics
+    fromPrometheus:
+      enabled: true
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  egress:
+    # Allow DNS resolution (kube-dns)
+    allowDNS: true
+    # Additional egress rules for backend services (AIM/BBR/EGA/AUT/HIC)
+    additionalRules: []
+    # - to:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: arhiax-backends
+    #   ports:
+    #     - protocol: TCP
+    #       port: 443
+
+# -----------------------------------------------------------------------------
+# Observability
+# -----------------------------------------------------------------------------
+metrics:
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    namespace: ""  # defaults to release namespace
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    relabelings: []
+
+  # Grafana dashboard as a ConfigMap (discovered by the sidecar / Grafana
+  # Operator via the grafana_dashboard=1 label).
+  grafanaDashboard:
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+
+# -----------------------------------------------------------------------------
+# OPA bundle ConfigMap
+# -----------------------------------------------------------------------------
+# The chart ships the 19 bundles as a ConfigMap. In a production deployment
+# you can disable this and mount your own bundle server URL via opa.extraArgs.
+# -----------------------------------------------------------------------------
+bundles:
+  # When true, render a ConfigMap from the bundled .rego files in this chart.
+  # When false, the OPA sidecar will fall back to whatever opa.extraArgs
+  # configures (e.g., a remote bundle server).
+  useConfigMap: true
+
+  # Force a rollout when bundles change by annotating the Deployment with
+  # a checksum of the bundle content. Highly recommended: when off, a
+  # ConfigMap edit will NOT trigger a Pod restart and the new policies
+  # will not take effect until the next unrelated rollout.
+  annotateChecksum: true

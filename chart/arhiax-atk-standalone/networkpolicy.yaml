@@ -1,0 +1,74 @@
+{{- if .Values.networkPolicy.enabled }}
+# =============================================================================
+# NetworkPolicy — default-deny ingress/egress with explicit allowlists
+# =============================================================================
+#
+# Policy posture: zero-trust. Nothing can reach ATK unless explicitly allowed;
+# ATK can only reach DNS + the named backend services.
+#
+# Audit anchor: ATK-C05 (Network segmentation)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "arhiax-runtime.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "arhiax-runtime.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "arhiax-runtime.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+
+  # -----------------------------------------------------------------------
+  # Ingress rules — what is allowed to reach ATK
+  # -----------------------------------------------------------------------
+  ingress:
+    {{- if .Values.networkPolicy.ingress.fromIngressController.enabled }}
+    # Traffic from the ingress controller (public API surface)
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingress.fromIngressController.namespaceSelector | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.atk.port }}
+    {{- end }}
+    {{- if .Values.networkPolicy.ingress.fromPrometheus.enabled }}
+    # Traffic from Prometheus (metrics scraping)
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingress.fromPrometheus.namespaceSelector | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.atk.port }}
+    {{- end }}
+
+  # -----------------------------------------------------------------------
+  # Egress rules — what ATK is allowed to reach
+  # -----------------------------------------------------------------------
+  egress:
+    {{- if .Values.networkPolicy.egress.allowDNS }}
+    # DNS resolution (kube-dns/CoreDNS)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    # Note: the OPA sidecar is in the SAME pod as ATK, so localhost traffic
+    # between the two containers is NOT subject to NetworkPolicy. No egress
+    # rule is needed for ATK→OPA.
+    {{- with .Values.networkPolicy.egress.additionalRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

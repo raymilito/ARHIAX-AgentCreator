@@ -1,0 +1,47 @@
+apiVersion: v2
+name: arhiax-runtime
+description: |
+  ARHIAX Community Edition runtime - agentic AI governance control plane.
+  Deploys the ARHIAX gateway, OPA policy engine with embedded bundles, and
+  an append-only evidence store. Optional D-TCG+ correlator subchart is
+  available but disabled by default in CE.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.24.0-0"
+home: https://github.com/arhiax/arhiax
+sources:
+  - https://github.com/arhiax/arhiax
+keywords:
+  - ai-governance
+  - agentic-ai
+  - opa
+  - policy-as-code
+  - arhia
+  - arhiax
+  - compliance
+  - evidence
+maintainers:
+  - name: ARHIAX Community
+    url: https://github.com/arhiax/arhiax
+    email: community@arhiax.dev
+annotations:
+  category: Security
+  licenses: Apache-2.0
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial ARHIAX CE v1.0.0 runtime chart
+    - kind: added
+      description: Gateway, OPA engine, and evidence store components
+    - kind: added
+      description: Optional D-TCG+ correlator subchart (disabled by default)
+dependencies:
+  - name: correlator
+    version: "1.0.0"
+    repository: "file://charts/correlator"
+    condition: correlator.enabled
+    tags:
+      - optional

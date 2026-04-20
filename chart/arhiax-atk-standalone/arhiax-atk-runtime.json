@@ -1,0 +1,191 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "title": "ARHIAX v11.4 — ATK Runtime",
+  "tags": ["arhiax", "governance", "atk", "sinergia"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(arhiax_envelope_evaluations_total, namespace)",
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "pod",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(arhiax_envelope_evaluations_total{namespace=\"$namespace\"}, pod)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Envelope evaluation latency (p50 / p95 / p99)",
+      "description": "5-check envelope evaluation latency per TR-2026-034-ATK §6 SLO (target: p95 < 45ms).",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(arhiax_envelope_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(arhiax_envelope_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(arhiax_envelope_latency_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.035},
+              {"color": "red", "value": 0.045}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Decision outcomes by type (6-tier ladder)",
+      "description": "Rate of ALLOW / ALLOW_WITH_MONITORING / CHALLENGE / ESCALATE_TO_HIC / DENY / HARD_DENY outcomes per TR-2026-034-ATK §4.",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(arhiax_envelope_decisions_total{namespace=\"$namespace\"}[5m])) by (outcome)",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "reqps"}
+      }
+    },
+    {
+      "id": 3,
+      "title": "Deny rate by bundle (B01-B19)",
+      "description": "Which bundles are firing denies. A sudden spike on a single bundle is usually a misconfiguration or an attack pattern.",
+      "type": "bargauge",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum(rate(arhiax_policy_denies_total{namespace=\"$namespace\"}[5m])) by (bundle)",
+          "legendFormat": "{{bundle}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true
+      },
+      "fieldConfig": {
+        "defaults": {"unit": "reqps"}
+      }
+    },
+    {
+      "id": 4,
+      "title": "HIC escalation rate (human-in-the-loop)",
+      "description": "Rate of envelopes escalated to HIC (Human-In-Control). Healthy systems should see this below 0.5% of total evaluations.",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 8, "w": 6, "h": 4},
+      "targets": [
+        {
+          "expr": "sum(rate(arhiax_envelope_decisions_total{namespace=\"$namespace\", outcome=\"ESCALATE_TO_HIC\"}[5m])) / sum(rate(arhiax_envelope_decisions_total{namespace=\"$namespace\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.005},
+              {"color": "red", "value": 0.02}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Evidence emission rate (EGA)",
+      "description": "Evidence records written to EGA per second, split by evidence type. Must be nonzero whenever the envelope rate is nonzero (EGA-C01).",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 18, "y": 8, "w": 6, "h": 4},
+      "targets": [
+        {
+          "expr": "sum(rate(arhiax_evidence_emitted_total{namespace=\"$namespace\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "reqps"}
+      }
+    },
+    {
+      "id": 6,
+      "title": "OPA sidecar policy evaluation latency",
+      "description": "OPA sidecar evaluation latency. ATK latency minus OPA latency = Python-side overhead (AIM lookup, BBR lookup, evidence emission).",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 4},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(opa_rego_query_eval_duration_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le))",
+          "legendFormat": "OPA p95",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "s"}
+      }
+    }
+  ]
+}

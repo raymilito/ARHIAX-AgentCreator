@@ -1,0 +1,17 @@
+# arhiax-correlator runtime dependencies
+#
+# v1.0.0 ships with ZERO external dependencies. The HTTP server, the
+# poll loop, and the Prometheus-format metrics renderer are all built
+# on Python's standard library, matching the supply-chain story of the
+# gateway and evidence-store binaries.
+#
+# v1.1+ will add numpy/scipy/pandas for the real D-TCG+ cross-domain
+# correlation math. When that happens, this file becomes:
+#
+#   numpy==2.1.*
+#   scipy==1.14.*
+#   pandas==2.2.*
+#
+# All pinned to a minor version with patch flexibility, all installable
+# as pre-built wheels on python:3.12-slim. The Dockerfile build stage
+# already has build-essential staged for any package that needs it.

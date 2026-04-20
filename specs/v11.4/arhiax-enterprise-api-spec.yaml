@@ -1,0 +1,1448 @@
+openapi: 3.0.3
+
+# =============================================================================
+# ARHIAX v11.4 — Enterprise API Specification
+# =============================================================================
+#
+# This is the OpenAPI 3.0 specification for the private enterprise API
+# operated by Sinergia Consulting Group S.A.S. as the commercial intelligence
+# layer of the ARHIAX open-core architecture.
+#
+# Endpoint base URL:    https://api.arhiax.com/v1
+# Status:               Enterprise (commercial license required)
+# Companion document:   ARHIAX_v114_OpenCore_Strategy.docx
+# Companion product:    ARHIAX runtime (Apache 2.0, github.com/arhiax/arhiax)
+#
+# This API is the durable competitive moat of ARHIAX. It cannot be replicated
+# from source code alone because it requires Sinergia to operate continuously
+# with a team of analysts and threat researchers. Subscribers receive signed
+# bundle updates, behavioral baselines pre-trained per vertical, threat
+# intelligence feeds, crosswalk updates, attestation verification, and
+# enterprise telemetry endpoints.
+#
+# =============================================================================
+
+info:
+  title: ARHIAX Enterprise API
+  version: "1.0.0"
+  description: |
+    Private commercial API serving the enterprise edition of ARHIAX v11.4.
+
+    ARHIAX is an open-core agentic AI governance framework. The runtime
+    (ATK service, MCP interceptor, 13 community bundles, Helm chart) is
+    open-source under Apache 2.0. The enterprise edition adds 6 governance
+    bundles (B14–B19) and the API documented here, both under commercial
+    license.
+
+    All endpoints under api.arhiax.com require a valid subscription with
+    API key authentication and HMAC request signing. Unauthenticated
+    requests are rejected with 401. Authenticated requests outside the
+    subscriber's tier are rejected with 403.
+
+    See ARHIAX_v114_OpenCore_Strategy.docx for the full commercial model,
+    pricing tiers, and the rationale for the open-core split.
+  termsOfService: https://arhiax.com/legal/terms
+  contact:
+    name: Sinergia Consulting Group S.A.S.
+    url: https://arhiax.com/support
+    email: api-support@arhiax.com
+  license:
+    name: ARHIAX Enterprise Commercial License v1.0
+    url: https://arhiax.com/legal/enterprise-license
+  x-sinergia-region: co-caribbean
+  x-sinergia-jurisdiction: Colombia
+
+servers:
+  - url: https://api.arhiax.com/v1
+    description: Production (multi-region active-active)
+  - url: https://api-staging.arhiax.com/v1
+    description: Staging (pre-release validation)
+  - url: https://api-sandbox.arhiax.com/v1
+    description: Sandbox (free tier for evaluation, 100 requests/day)
+
+# -----------------------------------------------------------------------------
+# Tags — endpoint categories
+# -----------------------------------------------------------------------------
+
+tags:
+  - name: Bundles
+    description: |
+      Signed updates of the 6 enterprise bundles (B14–B19) plus tightening
+      updates for B03 (prompt injection signatures) and B13 (PII detectors).
+      All bundles are signed with the Sinergia enterprise release key.
+  - name: Threat Intelligence
+    description: |
+      Continuous publication of attack signatures, indicators of compromise,
+      and novel attack patterns relevant to agentic systems. Feed frequency
+      depends on subscription tier (weekly for base, daily for premium).
+  - name: Behavioral Baselines
+    description: |
+      Pre-trained behavioral baselines by industry vertical. Loading these
+      into the BBR component eliminates the cold-start period of behavioral
+      learning that would otherwise take 4–8 weeks of shadow operation.
+  - name: Crosswalks
+    description: |
+      Updates to the 5 framework crosswalks (ARISE, NIST CSF 2.0, OWASP
+      Agentic Top 10, CSA ATF, Singapore MGF) when external frameworks
+      publish new versions or revise their existing controls.
+  - name: Attestation
+    description: |
+      Post-incident forensic verification that an ATK deployment was
+      running the configuration it claims at the moment of an event.
+      Used by auditors and incident responders.
+  - name: Telemetry
+    description: |
+      Opt-in aggregated and anonymized telemetry from subscribed deployments.
+      Telemetry informs the next round of bundle and baseline updates.
+      Subscribers can opt out at any time with no impact on other features.
+  - name: Subscription
+    description: |
+      Subscription management endpoints. View current tier, usage against
+      tier limits, billing status, and team membership.
+  - name: Support
+    description: |
+      Enterprise support ticketing integrated with the customer portal.
+      Severity-based SLA per subscription tier.
+
+# -----------------------------------------------------------------------------
+# Security schemes
+# -----------------------------------------------------------------------------
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-ARHIAX-Api-Key
+      description: |
+        Subscriber API key issued at portal.arhiax.com. Format:
+        arhx_{environment}_{32_random_chars}, e.g.
+        arhx_prod_8f3e2a1b9c7d4e6f5a8b3c2d1e0f9a7b. Keys are per-subscription
+        and should be rotated at least quarterly. Compromised keys can be
+        revoked immediately via the customer portal.
+
+    RequestSigning:
+      type: apiKey
+      in: header
+      name: X-ARHIAX-Signature
+      description: |
+        HMAC-SHA256 signature of the request constructed as:
+        sign(api_secret, METHOD + "\n" + PATH + "\n" + ISO8601_TIMESTAMP + "\n" + SHA256(BODY))
+        The timestamp must be provided in the X-ARHIAX-Timestamp header and
+        must be within 5 minutes of the server clock. Replay attacks are
+        prevented by an internal nonce cache with 10-minute window.
+
+  parameters:
+    SubscriberIdHeader:
+      name: X-ARHIAX-Subscriber-Id
+      in: header
+      required: true
+      description: Subscriber identifier issued at onboarding (format SUB-YYYY-NNNNN).
+      schema:
+        type: string
+        pattern: '^SUB-\d{4}-\d{5}$'
+        example: SUB-2026-00042
+
+    DeploymentIdHeader:
+      name: X-ARHIAX-Deployment-Id
+      in: header
+      required: true
+      description: Deployment identifier for multi-deployment subscribers (format DPL-{name}-{region}).
+      schema:
+        type: string
+        pattern: '^DPL-[a-z0-9-]+-[a-z0-9-]+$'
+        example: DPL-sprbun-co-caribbean
+
+    TimestampHeader:
+      name: X-ARHIAX-Timestamp
+      in: header
+      required: true
+      description: ISO 8601 UTC timestamp of the request, used for signature verification and replay prevention.
+      schema:
+        type: string
+        format: date-time
+        example: "2026-04-08T12:34:56Z"
+
+    CorrelationIdHeader:
+      name: X-ARHIAX-Correlation-Id
+      in: header
+      required: false
+      description: Optional correlation ID propagated to logs and audit trails.
+      schema:
+        type: string
+        example: env-2026-04-08-abc123
+
+  schemas:
+
+    # -------------------------------------------------------------------------
+    # Common envelope schemas
+    # -------------------------------------------------------------------------
+
+    ErrorResponse:
+      type: object
+      required: [error, code, message, timestamp]
+      properties:
+        error:
+          type: string
+          description: Short machine-readable error category.
+          example: invalid_signature
+        code:
+          type: integer
+          description: ARHIAX-specific numeric error code.
+          example: 4011
+        message:
+          type: string
+          description: Human-readable error message.
+          example: "HMAC signature does not match request body and timestamp."
+        timestamp:
+          type: string
+          format: date-time
+        correlationId:
+          type: string
+          nullable: true
+        documentation:
+          type: string
+          format: uri
+          example: https://docs.arhiax.com/errors/4011
+
+    BundleManifest:
+      type: object
+      required: [bundleId, version, releaseDate, validityWindow, signatureAlgorithm, signature, hash, downloadUrl]
+      properties:
+        bundleId:
+          type: string
+          enum: [B14, B15, B16, B17, B18, B19, B03_signatures, B13_detectors]
+          example: B14
+        bundleName:
+          type: string
+          example: AIM Identity
+        version:
+          type: string
+          example: "11.4.7"
+        releaseDate:
+          type: string
+          format: date-time
+          example: "2026-04-08T00:00:00Z"
+        validityWindow:
+          type: object
+          required: [notBefore, notAfter]
+          properties:
+            notBefore:
+              type: string
+              format: date-time
+              example: "2026-04-08T00:00:00Z"
+            notAfter:
+              type: string
+              format: date-time
+              example: "2026-07-08T00:00:00Z"
+              description: After this timestamp the runtime gracefully degrades and refuses to load this bundle. Subscribers receive new versions before expiration.
+        signatureAlgorithm:
+          type: string
+          enum: [Ed25519]
+          example: Ed25519
+        signature:
+          type: string
+          description: Base64-encoded Ed25519 signature over the canonical bundle hash + validity window.
+          example: "MEUCIQDxxx...base64...yyy=="
+        hash:
+          type: object
+          required: [algorithm, value]
+          properties:
+            algorithm:
+              type: string
+              enum: [sha256, blake2b]
+              example: sha256
+            value:
+              type: string
+              example: "a3f2c8e1b9d4f7e6a2c5b8d1e4f7a0c3b6d9e2f5a8c1b4d7e0f3a6c9b2d5e8f1"
+        downloadUrl:
+          type: string
+          format: uri
+          example: https://api.arhiax.com/v1/bundles/B14/11.4.7/download
+        sizeBytes:
+          type: integer
+          example: 8192
+        releaseNotes:
+          type: string
+          example: "Adds support for NHI v2 credential format. Tightens credential expiration grace period."
+
+    ThreatIntelEntry:
+      type: object
+      required: [id, category, severity, publishedAt, summary]
+      properties:
+        id:
+          type: string
+          example: TI-2026-04-001
+        category:
+          type: string
+          enum: [prompt_injection, data_exfiltration, credential_abuse, autonomy_escalation, coordination_attack, supply_chain]
+          example: prompt_injection
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+          example: high
+        publishedAt:
+          type: string
+          format: date-time
+        summary:
+          type: string
+          example: "Novel prompt injection variant using zero-width Unicode characters to bypass token-level signature matching."
+        affectedBundles:
+          type: array
+          items:
+            type: string
+          example: [B03]
+        signatures:
+          type: array
+          description: Optional list of detection signatures included with the entry. Loaded by B03 when the threat applies.
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [regex, semantic, statistical]
+              pattern:
+                type: string
+        recommendedAction:
+          type: string
+          enum: [monitor, block, escalate, custom]
+          example: block
+        references:
+          type: array
+          items:
+            type: string
+            format: uri
+
+    BehavioralBaseline:
+      type: object
+      required: [verticalId, version, agentClass, features, sampleSize]
+      properties:
+        verticalId:
+          type: string
+          enum: [port_logistics, fintech_brasil, fintech_eu, fintech_us, healthcare, retail, government, telecom, energy]
+          example: port_logistics
+        version:
+          type: string
+          example: "2026.04"
+        agentClass:
+          type: string
+          example: vessel_scheduling_agent
+          description: The class of agent the baseline applies to within the vertical.
+        features:
+          type: object
+          description: Map of feature name to baseline statistical profile (mean, stddev, percentiles).
+          additionalProperties:
+            type: object
+            properties:
+              mean:
+                type: number
+              stddev:
+                type: number
+              p50:
+                type: number
+              p95:
+                type: number
+              p99:
+                type: number
+        sampleSize:
+          type: integer
+          description: Number of agent-days observed to construct this baseline.
+          example: 12500
+        confidenceLevel:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.95
+        anonymizationProof:
+          type: string
+          description: Hash of the differential privacy proof that this baseline was constructed without exposing individual subscriber data.
+          example: "dp:eps=1.0:hash=a3f2c8e1..."
+
+    CrosswalkUpdate:
+      type: object
+      required: [framework, frameworkVersion, affectedControls, releaseDate]
+      properties:
+        framework:
+          type: string
+          enum: [ARISE, NIST_CSF, OWASP_Agentic, CSA_ATF, Singapore_MGF]
+          example: NIST_CSF
+        frameworkVersion:
+          type: string
+          example: "2.0"
+        previousVersion:
+          type: string
+          nullable: true
+          example: "1.1"
+        affectedControls:
+          type: array
+          description: ARHIAX control IDs affected by the framework update.
+          items:
+            type: string
+          example: [ATK-C01, ATK-C04, AIM-C01, AIM-C02]
+        releaseDate:
+          type: string
+          format: date-time
+        changeType:
+          type: string
+          enum: [added, modified, deprecated, removed]
+          example: modified
+        migrationGuidance:
+          type: string
+          example: "NIST CSF 2.0 splits the IDENTIFY function into two sub-functions. The ATK-C01 crosswalk now maps to ID.AM-1 instead of ID.AM. No runtime change required; documentation update only."
+        documentationUrl:
+          type: string
+          format: uri
+
+    AttestationRecord:
+      type: object
+      required: [attestationId, deploymentId, timestamp, configHash, bundleVersions, runtimeVersion]
+      properties:
+        attestationId:
+          type: string
+          example: ATT-2026-04-08-DPL-sprbun-co-caribbean-001
+        deploymentId:
+          type: string
+          example: DPL-sprbun-co-caribbean
+        timestamp:
+          type: string
+          format: date-time
+          description: When the deployment produced this attestation (ATK-C07 startup attestation).
+        configHash:
+          type: string
+          description: SHA-256 hash of the canonical ATK service configuration at startup.
+        bundleVersions:
+          type: object
+          description: Map of bundle ID to version active at attestation time.
+          additionalProperties:
+            type: string
+          example:
+            B14: "11.4.7"
+            B15: "11.4.5"
+            B16: "11.4.7"
+            B17: "11.4.6"
+            B18: "11.4.4"
+            B19: "11.4.6"
+        runtimeVersion:
+          type: string
+          example: "11.4.0"
+        signatureValid:
+          type: boolean
+          description: Whether the attestation signature was verified against the Sinergia public key on file at verification time.
+        edition:
+          type: string
+          enum: [community, enterprise]
+        verificationTimestamp:
+          type: string
+          format: date-time
+
+    SubscriptionStatus:
+      type: object
+      required: [subscriberId, tier, status, validUntil, deployments]
+      properties:
+        subscriberId:
+          type: string
+          example: SUB-2026-00042
+        organizationName:
+          type: string
+          example: "Banco Brasileiro PSAV S.A."
+        tier:
+          type: string
+          enum: [starter, growth, scale, mission]
+          example: scale
+        status:
+          type: string
+          enum: [active, trial, past_due, suspended, cancelled]
+          example: active
+        validUntil:
+          type: string
+          format: date-time
+        deployments:
+          type: array
+          items:
+            type: object
+            properties:
+              deploymentId:
+                type: string
+              region:
+                type: string
+              edition:
+                type: string
+                enum: [community, enterprise]
+              activeAgents:
+                type: integer
+              lastSeenAt:
+                type: string
+                format: date-time
+        addons:
+          type: array
+          items:
+            type: string
+            enum:
+              - threat_intel_premium
+              - vertical_baseline_extra
+              - rapid_response_updates
+              - custom_bundle_dev
+              - annual_compliance_attestation
+              - pre_audit_readiness
+              - audit_defense_retainer
+        usageMonth:
+          type: object
+          properties:
+            agentMaxObserved:
+              type: integer
+              description: Peak agents under governance during the current billing month.
+            envelopesProcessed:
+              type: integer
+            apiCallsToEnterprise:
+              type: integer
+
+    SupportTicket:
+      type: object
+      required: [ticketId, severity, summary, status, createdAt]
+      properties:
+        ticketId:
+          type: string
+          example: TKT-2026-04-08-00123
+        severity:
+          type: string
+          enum: [P1_critical, P2_high, P3_medium, P4_low]
+        summary:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+        status:
+          type: string
+          enum: [open, in_progress, waiting_customer, resolved, closed]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        assignedEngineer:
+          type: string
+          nullable: true
+        slaResponseDue:
+          type: string
+          format: date-time
+          nullable: true
+        relatedDeployment:
+          type: string
+          nullable: true
+        relatedBundle:
+          type: string
+          nullable: true
+
+# Apply security globally
+security:
+  - ApiKeyAuth: []
+    RequestSigning: []
+
+# -----------------------------------------------------------------------------
+# Paths
+# -----------------------------------------------------------------------------
+
+paths:
+
+  # ===========================================================================
+  # BUNDLES — signed updates of enterprise bundles
+  # ===========================================================================
+
+  /bundles/manifest:
+    get:
+      tags: [Bundles]
+      summary: Get current bundle manifest
+      description: |
+        Returns the current manifest of all enterprise bundles available to
+        the subscriber's tier. The manifest includes bundle ID, version,
+        validity window, signature, hash, and download URL. Clients should
+        compare against their currently loaded bundle versions and pull
+        updates as needed.
+
+        Recommended polling frequency: every 6 hours for base tier, every
+        1 hour for premium threat intel tier, on demand via webhook for
+        rapid response tier.
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/DeploymentIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+        - $ref: '#/components/parameters/CorrelationIdHeader'
+      responses:
+        '200':
+          description: Current bundle manifest for the subscriber's tier.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  manifestVersion:
+                    type: string
+                    example: "2026-04-08-001"
+                  generatedAt:
+                    type: string
+                    format: date-time
+                  bundles:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BundleManifest'
+                  nextRecommendedPoll:
+                    type: string
+                    format: date-time
+        '401':
+          description: Authentication failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Subscription tier does not include enterprise bundles.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded for tier.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /bundles/{bundleId}/{version}/download:
+    get:
+      tags: [Bundles]
+      summary: Download a specific bundle version
+      description: |
+        Downloads the signed Rego content of a specific bundle version. The
+        response is the raw .rego file plus a detached signature file in a
+        tar archive. The runtime extracts both, verifies the signature against
+        the bundled Sinergia public key, and only loads the bundle if verification
+        passes.
+      parameters:
+        - name: bundleId
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [B14, B15, B16, B17, B18, B19, B03_signatures, B13_detectors]
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "11.4.7"
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/DeploymentIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      responses:
+        '200':
+          description: Signed bundle archive (tar containing .rego + signature).
+          content:
+            application/x-tar:
+              schema:
+                type: string
+                format: binary
+          headers:
+            X-ARHIAX-Bundle-Hash:
+              schema:
+                type: string
+              description: SHA-256 hash of the bundle content for integrity verification before extraction.
+            X-ARHIAX-Bundle-Signature-Algorithm:
+              schema:
+                type: string
+                enum: [Ed25519]
+        '404':
+          description: Bundle version not found or expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /bundles/public-key:
+    get:
+      tags: [Bundles]
+      summary: Get the current Sinergia enterprise signing public key
+      description: |
+        Returns the current Sinergia enterprise public key used to sign
+        bundles. Subscribers should embed this key in their ATK runtime
+        configuration. Key rotation occurs quarterly with overlap period
+        so that bundles signed with the previous key remain verifiable
+        for 30 days after rotation.
+
+        Public keys are also published at github.com/arhiax/arhiax in the
+        public repo so community users can independently verify community
+        bundle integrity, but enterprise bundles use a separate key
+        available only via this endpoint.
+      security: []  # public endpoint, no auth required
+      responses:
+        '200':
+          description: Current and previous public keys.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current:
+                    type: object
+                    properties:
+                      keyId:
+                        type: string
+                        example: arhiax-enterprise-2026-q2
+                      algorithm:
+                        type: string
+                        enum: [Ed25519]
+                      publicKey:
+                        type: string
+                        description: Base64-encoded Ed25519 public key.
+                      validFrom:
+                        type: string
+                        format: date-time
+                      validUntil:
+                        type: string
+                        format: date-time
+                  previous:
+                    type: object
+                    nullable: true
+                    properties:
+                      keyId:
+                        type: string
+                      publicKey:
+                        type: string
+                      validUntil:
+                        type: string
+                        format: date-time
+
+  # ===========================================================================
+  # THREAT INTELLIGENCE
+  # ===========================================================================
+
+  /threat-intel/feed:
+    get:
+      tags: [Threat Intelligence]
+      summary: Get current threat intelligence feed
+      description: |
+        Returns threat intelligence entries published since the subscriber's
+        last poll. Frequency depends on tier: weekly for base, daily for
+        threat intel premium, real-time webhook push for rapid response tier.
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+        - name: since
+          in: query
+          required: false
+          description: ISO 8601 timestamp; only entries published after this time are returned.
+          schema:
+            type: string
+            format: date-time
+        - name: severity
+          in: query
+          required: false
+          description: Filter by minimum severity.
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [prompt_injection, data_exfiltration, credential_abuse, autonomy_escalation, coordination_attack, supply_chain]
+      responses:
+        '200':
+          description: Threat intel entries matching the query.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ThreatIntelEntry'
+                  count:
+                    type: integer
+                  nextPollAt:
+                    type: string
+                    format: date-time
+
+  /threat-intel/signatures/{bundleId}:
+    get:
+      tags: [Threat Intelligence]
+      summary: Get current detection signatures for a specific bundle
+      description: |
+        Returns the current set of detection signatures for B03 (prompt
+        injection) or B13 (PII detection). The runtime applies these
+        in addition to the rules baked into the bundle code.
+      parameters:
+        - name: bundleId
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [B03, B13]
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      responses:
+        '200':
+          description: Current signature set.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bundleId:
+                    type: string
+                  signatureSetVersion:
+                    type: string
+                  publishedAt:
+                    type: string
+                    format: date-time
+                  signatures:
+                    type: array
+                    items:
+                      type: object
+
+  /threat-intel/webhook:
+    post:
+      tags: [Threat Intelligence]
+      summary: Register a webhook for real-time threat alerts
+      description: |
+        Available only to Rapid Response Bundle Updates add-on subscribers.
+        Sinergia POSTs to the registered URL within 4 hours of confirmed
+        novel attack detection.
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [webhookUrl, hmacSecret]
+              properties:
+                webhookUrl:
+                  type: string
+                  format: uri
+                hmacSecret:
+                  type: string
+                  description: Secret used by Sinergia to sign incoming webhook payloads. Subscriber generates this and stores it for verification.
+                eventCategories:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Webhook registered.
+        '403':
+          description: Subscription tier does not include rapid response add-on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ===========================================================================
+  # BEHAVIORAL BASELINES
+  # ===========================================================================
+
+  /baselines/{vertical}/{version}:
+    get:
+      tags: [Behavioral Baselines]
+      summary: Download a pre-trained behavioral baseline for a vertical
+      description: |
+        Returns a complete behavioral baseline for the specified vertical
+        and version. The baseline is loaded into the BBR component and
+        eliminates the cold-start period of behavioral learning. Baselines
+        are constructed from aggregated, differentially-private telemetry
+        from consenting subscribers in the same vertical.
+
+        Subscribers receive their first vertical baseline included with
+        any tier. Additional verticals require the Vertical Baselines add-on.
+      parameters:
+        - name: vertical
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [port_logistics, fintech_brasil, fintech_eu, fintech_us, healthcare, retail, government, telecom, energy]
+        - name: version
+          in: path
+          required: true
+          description: Baseline version (year-quarter format, e.g. 2026.04).
+          schema:
+            type: string
+            example: "2026.04"
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      responses:
+        '200':
+          description: Baseline content with metadata and DP proof.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BehavioralBaseline'
+        '402':
+          description: Vertical Baselines add-on required for this vertical.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /baselines/list:
+    get:
+      tags: [Behavioral Baselines]
+      summary: List available baselines
+      description: Lists all baseline verticals and versions available to the subscriber's tier.
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      responses:
+        '200':
+          description: List of available baselines.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  baselines:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        vertical:
+                          type: string
+                        availableVersions:
+                          type: array
+                          items:
+                            type: string
+                        includedInTier:
+                          type: boolean
+                        addonRequired:
+                          type: string
+                          nullable: true
+
+  # ===========================================================================
+  # CROSSWALKS — framework updates
+  # ===========================================================================
+
+  /crosswalks/updates:
+    get:
+      tags: [Crosswalks]
+      summary: Get crosswalk updates since a specified date
+      description: |
+        Returns crosswalk updates published since the specified date. Updates
+        are produced when external frameworks (NIST, OWASP, CSA, ARISE,
+        Singapore MGF) publish new versions or revise existing controls.
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: framework
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ARISE, NIST_CSF, OWASP_Agentic, CSA_ATF, Singapore_MGF]
+      responses:
+        '200':
+          description: Crosswalk updates matching the query.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CrosswalkUpdate'
+
+  /crosswalks/{framework}/{version}:
+    get:
+      tags: [Crosswalks]
+      summary: Get the full crosswalk for a specific framework version
+      parameters:
+        - name: framework
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [ARISE, NIST_CSF, OWASP_Agentic, CSA_ATF, Singapore_MGF]
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      responses:
+        '200':
+          description: Full crosswalk mapping ARHIAX controls to framework controls.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  framework:
+                    type: string
+                  frameworkVersion:
+                    type: string
+                  mappings:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        arhiaxControlId:
+                          type: string
+                          example: ATK-C01
+                        externalControlId:
+                          type: string
+                          example: ID.AM-1
+                        rationale:
+                          type: string
+                        confidence:
+                          type: string
+                          enum: [direct, partial, indirect]
+
+  # ===========================================================================
+  # ATTESTATION
+  # ===========================================================================
+
+  /attestation/verify:
+    post:
+      tags: [Attestation]
+      summary: Verify a deployment attestation
+      description: |
+        Used by auditors and incident responders to verify that an ATK
+        deployment was running the configuration it claims at a specific
+        point in time. The deployment captures attestations at startup
+        (ATK-C07) and on configuration change. Auditors submit the
+        attestation document and this endpoint verifies the signature
+        and confirms that the configuration hash matches Sinergia's
+        records of the bundle versions in use at that time.
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attestation]
+              properties:
+                attestation:
+                  $ref: '#/components/schemas/AttestationRecord'
+                  description: The attestation document to verify, as captured by ATK-C07 at the deployment.
+                expectedTimestamp:
+                  type: string
+                  format: date-time
+                  description: Optional. If provided, the verification confirms the deployment was running the claimed configuration at this exact time.
+      responses:
+        '200':
+          description: Verification result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  verified:
+                    type: boolean
+                  attestationId:
+                    type: string
+                  signatureValid:
+                    type: boolean
+                  configHashMatchesRecord:
+                    type: boolean
+                  bundleVersionsValidAtTime:
+                    type: boolean
+                  notes:
+                    type: string
+                  verifiedBy:
+                    type: string
+                    description: Sinergia verification operator ID for audit trail.
+
+  /attestation/history/{deploymentId}:
+    get:
+      tags: [Attestation]
+      summary: Get attestation history for a deployment
+      description: |
+        Returns the chronological history of attestations submitted by a
+        deployment. Useful for auditors reviewing configuration changes
+        over a billing period or incident window.
+      parameters:
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Attestation history.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deploymentId:
+                    type: string
+                  attestations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AttestationRecord'
+
+  # ===========================================================================
+  # TELEMETRY (opt-in)
+  # ===========================================================================
+
+  /telemetry/submit:
+    post:
+      tags: [Telemetry]
+      summary: Submit anonymized telemetry batch
+      description: |
+        Submits an anonymized batch of operational telemetry from a deployment.
+        Telemetry is differentially private (epsilon = 1.0) and contains no
+        envelope contents, no agent IDs, no tenant IDs, and no business data.
+        It contains aggregate counters of bundle decisions, latency
+        distributions, and circuit breaker state transitions.
+
+        Telemetry is opt-in. Subscribers can enable or disable it at any
+        time via this endpoint. Aggregate telemetry feeds the next round
+        of bundle and baseline updates and is the operational basis for
+        the API of intelligence.
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/DeploymentIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [batchId, generatedAt, dpEpsilon, metrics]
+              properties:
+                batchId:
+                  type: string
+                generatedAt:
+                  type: string
+                  format: date-time
+                dpEpsilon:
+                  type: number
+                  format: float
+                  description: Differential privacy epsilon used to generate this batch.
+                metrics:
+                  type: object
+                  description: Aggregated metrics. No raw envelope content.
+                  properties:
+                    bundleDecisionCounts:
+                      type: object
+                      additionalProperties:
+                        type: integer
+                    latencyP99Seconds:
+                      type: number
+                    circuitBreakerTrips:
+                      type: integer
+                    enterpriseFeaturesAvailable:
+                      type: boolean
+      responses:
+        '202':
+          description: Telemetry batch accepted for processing.
+        '403':
+          description: Telemetry submission disabled by subscriber.
+
+  /telemetry/preferences:
+    get:
+      tags: [Telemetry]
+      summary: Get telemetry preferences
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      responses:
+        '200':
+          description: Current telemetry preferences.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  categoriesEnabled:
+                    type: array
+                    items:
+                      type: string
+                  dpEpsilon:
+                    type: number
+
+    put:
+      tags: [Telemetry]
+      summary: Update telemetry preferences
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                categoriesEnabled:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Preferences updated.
+
+  # ===========================================================================
+  # SUBSCRIPTION MANAGEMENT
+  # ===========================================================================
+
+  /subscription/status:
+    get:
+      tags: [Subscription]
+      summary: Get current subscription status
+      description: Returns the current subscription tier, status, deployments, addons, and usage against tier limits.
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      responses:
+        '200':
+          description: Subscription status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionStatus'
+
+  /subscription/usage:
+    get:
+      tags: [Subscription]
+      summary: Get detailed usage metrics for the current billing month
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+        - name: month
+          in: query
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}$'
+            example: "2026-04"
+      responses:
+        '200':
+          description: Usage metrics.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  month:
+                    type: string
+                  agentMaxObserved:
+                    type: integer
+                  envelopesProcessed:
+                    type: integer
+                  apiCallsBreakdown:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                  tierLimit:
+                    type: integer
+                  utilizationPercent:
+                    type: number
+
+  # ===========================================================================
+  # ENTERPRISE SUPPORT
+  # ===========================================================================
+
+  /support/tickets:
+    post:
+      tags: [Support]
+      summary: Open a support ticket
+      description: |
+        Opens an enterprise support ticket. Severity-based SLA per tier:
+        P1 critical = 1 hour response (Mission tier), 4 hours (Scale),
+        8 hours (Growth). Lower severities have proportionally longer SLAs.
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [severity, summary, description]
+              properties:
+                severity:
+                  type: string
+                  enum: [P1_critical, P2_high, P3_medium, P4_low]
+                summary:
+                  type: string
+                  maxLength: 200
+                description:
+                  type: string
+                relatedDeployment:
+                  type: string
+                  nullable: true
+                relatedBundle:
+                  type: string
+                  nullable: true
+                attachments:
+                  type: array
+                  items:
+                    type: string
+                    format: uri
+      responses:
+        '201':
+          description: Ticket created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportTicket'
+
+    get:
+      tags: [Support]
+      summary: List support tickets for the subscriber
+      parameters:
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, in_progress, waiting_customer, resolved, closed]
+      responses:
+        '200':
+          description: List of tickets.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tickets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SupportTicket'
+
+  /support/tickets/{ticketId}:
+    get:
+      tags: [Support]
+      summary: Get a specific ticket
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/SubscriberIdHeader'
+        - $ref: '#/components/parameters/TimestampHeader'
+      responses:
+        '200':
+          description: Ticket details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportTicket'
+
+# -----------------------------------------------------------------------------
+# Rate limiting (informational, enforced at gateway)
+# -----------------------------------------------------------------------------
+
+x-rate-limits:
+  description: |
+    Rate limits are enforced at the API gateway and vary by tier and endpoint
+    category. Limits below are per subscription per hour unless noted.
+
+    Bundle endpoints:
+      Starter:    50/h
+      Growth:     500/h
+      Scale:      5000/h
+      Mission:    unlimited
+
+    Threat intel endpoints:
+      Starter:    20/h
+      Growth:     200/h
+      Scale:      2000/h
+      Mission:    unlimited
+
+    Baseline endpoints:
+      Starter:    10/h
+      Growth:     100/h
+      Scale:      1000/h
+      Mission:    unlimited
+
+    Attestation endpoints (audit-critical):
+      All tiers:  100/h baseline, burst 500/min for incident response
+
+    Telemetry submit (high volume):
+      All tiers:  unlimited (subscriber controls cadence)
+
+    Support endpoints:
+      All tiers:  60/h
+
+# -----------------------------------------------------------------------------
+# Error codes reference (informational)
+# -----------------------------------------------------------------------------
+
+x-error-codes:
+  - code: 4001
+    error: missing_api_key
+    httpStatus: 401
+  - code: 4002
+    error: invalid_api_key
+    httpStatus: 401
+  - code: 4003
+    error: api_key_revoked
+    httpStatus: 401
+  - code: 4011
+    error: invalid_signature
+    httpStatus: 401
+  - code: 4012
+    error: timestamp_skew_too_large
+    httpStatus: 401
+  - code: 4013
+    error: replay_detected
+    httpStatus: 401
+  - code: 4031
+    error: tier_does_not_include_feature
+    httpStatus: 403
+  - code: 4032
+    error: addon_required
+    httpStatus: 403
+  - code: 4033
+    error: deployment_not_authorized
+    httpStatus: 403
+  - code: 4291
+    error: rate_limit_exceeded
+    httpStatus: 429
+  - code: 5001
+    error: signing_service_unavailable
+    httpStatus: 503
+  - code: 5002
+    error: bundle_distribution_unavailable
+    httpStatus: 503
+
+# =============================================================================
+# End of ARHIAX Enterprise API Specification v1.0.0
+# =============================================================================

@@ -1,0 +1,17 @@
+{{- if and .Values.opa.enabled (eq .Values.opa.bundleSource.mode "configmap") .Values.opa.bundleConfigMap.create -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "arhiax.opa.bundleConfigMapName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.opa.labels" . | nindent 4 }}
+  annotations:
+    arhiax.dev/bundle-version: {{ .Chart.AppVersion | quote }}
+    arhiax.dev/bundle-source: "chart-embedded"
+data:
+{{- range $path, $_ := .Files.Glob "files/policies/*.rego" }}
+  {{ base $path }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}

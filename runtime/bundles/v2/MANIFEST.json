@@ -1,0 +1,46 @@
+{
+    "package": "arhia-opa-bundles",
+    "version": "11.4.0",
+    "generatedDate": "2026-04-04",
+    "author": "Sinergia Consulting Group S.A.S.",
+    "documentId": "TR-2026-033-OPA",
+    "engine": "OPA v0.68+",
+    "regoVersion": "v1",
+    "bundles": [
+        {"id": "B01", "file": "opa_engine/B01_opa_core.rego", "controls": ["OPA-C01","OPA-C02","OPA-C03","OPA-C04"], "status": "ORIGINAL"},
+        {"id": "B02", "file": "domain/B02_data_classification.rego", "controls": [], "status": "ORIGINAL"},
+        {"id": "B03", "file": "atk/B03_atk_envelope.rego", "controls": ["ATK-C01","ATK-C02","ATK-C03","ATK-C04","ATK-C05","ATK-C06","ATK-C07"], "status": "EXTENDED"},
+        {"id": "B04", "file": "dtg/B04_dtg_trajectory.rego", "controls": ["DTG-C01","DTG-C02"], "status": "ORIGINAL"},
+        {"id": "B05", "file": "hic/B05_hic_checkpoints.rego", "controls": ["HIC-C01","HIC-C02","HIC-C03","HIC-C04","HIC-C05"], "status": "ORIGINAL"},
+        {"id": "B06", "file": "domain/B06_prompt_safety.rego", "controls": [], "status": "ORIGINAL"},
+        {"id": "B07", "file": "aut/B07_autonomy_gates.rego", "controls": ["AUT-C01","AUT-C02","AUT-C03","AUT-C04","AUT-C05"], "status": "EXTENDED"},
+        {"id": "B08", "file": "domain/B08_output_filter.rego", "controls": [], "status": "ORIGINAL"},
+        {"id": "B09", "file": "domain/B09_tool_governance.rego", "controls": [], "status": "ORIGINAL"},
+        {"id": "B10", "file": "domain/B10_data_access.rego", "controls": [], "status": "ORIGINAL"},
+        {"id": "B11", "file": "aibom/B11_aibom_lifecycle.rego", "controls": ["ABO-C01","ABO-C02","ABO-C03"], "status": "EXTENDED"},
+        {"id": "B12", "file": "domain/B12_network_boundary.rego", "controls": [], "status": "ORIGINAL"},
+        {"id": "B13", "file": "domain/B13_compliance_reporting.rego", "controls": [], "status": "ORIGINAL"},
+        {"id": "B14", "file": "aim/B14_aim_identity.rego", "controls": ["AIM-C01","AIM-C02"], "status": "NEW"},
+        {"id": "B15", "file": "aim/B15_aim_lifecycle.rego", "controls": ["AIM-C03"], "status": "NEW"},
+        {"id": "B16", "file": "aim/B16_aim_permissions.rego", "controls": ["AIM-C01","AIM-C02"], "status": "NEW"},
+        {"id": "B17", "file": "dtg/B17_dtg_correlation.rego", "controls": ["DTG-C03","DTG-C04","DTG-C05"], "status": "NEW"},
+        {"id": "B18", "file": "ega/B18_ega_evidence.rego", "controls": ["EGA-C01","EGA-C02","EGA-C04"], "status": "NEW"},
+        {"id": "B19", "file": "ega/B19_ega_retention.rego", "controls": ["EGA-C03"], "status": "NEW"}
+    ],
+    "policyChain": [
+        "B14 (AIM Identity)",
+        "B16 (AIM Permission)",
+        "B03 (ATK Envelope)",
+        "B07 (Autonomy Gate)",
+        "B01-B13 (Domain Policies)",
+        "B17 (D-TCG+ Correlation)",
+        "B18 (EGA Evidence)",
+        "B19 (EGA Retention)"
+    ],
+    "statistics": {
+        "totalBundles": 19,
+        "newBundles": 6,
+        "extendedBundles": 3,
+        "originalBundles": 10
+    }
+}

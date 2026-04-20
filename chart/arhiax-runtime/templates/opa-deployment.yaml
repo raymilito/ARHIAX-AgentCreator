@@ -1,0 +1,135 @@
+{{- include "arhiax.validateValues" . -}}
+{{- if .Values.opa.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "arhiax.opa.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.opa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.opa.replicaCount }}
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  selector:
+    matchLabels:
+      {{- include "arhiax.opa.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "arhiax.opa.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/opa-configmap.yaml") . | sha256sum }}
+        {{- if .Values.opa.bundleConfigMap.create }}
+        checksum/bundles: {{ include (print $.Template.BasePath "/opa-bundles-configmap.yaml") . | sha256sum }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "arhiax.opa.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- include "arhiax.imagePullSecrets" (dict "image" .Values.opa.image "global" .Values.global) | nindent 6 }}
+      {{- with .Values.opa.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.opa.podSecurityContext | nindent 8 }}
+      {{- with .Values.opa.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.opa.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.opa.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: opa
+          image: {{ include "arhiax.image" (dict "image" .Values.opa.image "global" .Values.global) | quote }}
+          imagePullPolicy: {{ .Values.opa.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.opa.containerSecurityContext | nindent 12 }}
+          args:
+            - "run"
+            - "--server"
+            - "--addr=0.0.0.0:{{ .Values.opa.containerPort }}"
+            - "--diagnostic-addr=0.0.0.0:{{ .Values.opa.diagnosticPort }}"
+            - "--config-file=/config/config.yaml"
+            - "--log-level={{ .Values.gateway.config.logLevel }}"
+            - "--log-format=json"
+            {{- if eq .Values.opa.bundleSource.mode "configmap" }}
+            - "/policies"
+            {{- end }}
+            {{- with .Values.opa.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.opa.containerPort }}
+              protocol: TCP
+            - name: diagnostic
+              containerPort: {{ .Values.opa.diagnosticPort }}
+              protocol: TCP
+          {{- with .Values.opa.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.opa.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.opa.livenessProbe.httpGet.path }}
+              port: diagnostic
+            initialDelaySeconds: {{ .Values.opa.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.opa.livenessProbe.periodSeconds }}
+          {{- end }}
+          {{- if .Values.opa.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.opa.readinessProbe.httpGet.path }}
+              port: diagnostic
+            initialDelaySeconds: {{ .Values.opa.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.opa.readinessProbe.periodSeconds }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.opa.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            {{- if eq .Values.opa.bundleSource.mode "configmap" }}
+            - name: policies
+              mountPath: /policies
+              readOnly: true
+            {{- end }}
+            {{- if and (eq .Values.opa.bundleSource.mode "server") .Values.opa.bundleServer.credentials.existingSecret }}
+            - name: bundle-token
+              mountPath: /var/run/secrets/arhiax
+              readOnly: true
+            {{- end }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "arhiax.opa.configMapName" . }}
+        {{- if eq .Values.opa.bundleSource.mode "configmap" }}
+        - name: policies
+          configMap:
+            name: {{ include "arhiax.opa.bundleConfigMapName" . }}
+        {{- end }}
+        {{- if and (eq .Values.opa.bundleSource.mode "server") .Values.opa.bundleServer.credentials.existingSecret }}
+        - name: bundle-token
+          secret:
+            secretName: {{ .Values.opa.bundleServer.credentials.existingSecret }}
+            items:
+              - key: token
+                path: bundle-token
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

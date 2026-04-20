@@ -1,0 +1,39 @@
+{{- if and .Values.opa.enabled .Values.bundles.useConfigMap }}
+# =============================================================================
+# ConfigMap — OPA bundles (19 total across 2 .rego files)
+# =============================================================================
+#
+# This ConfigMap is the source of truth for OPA policies at runtime. It is
+# mounted into the OPA sidecar at /policies. When any of the .rego files
+# change, the checksum annotation on the Deployment changes, triggering a
+# controlled rollout (RollingUpdate with maxUnavailable=0).
+#
+# Audit anchor: OPA-C02 (Policy version tracking) — the sha256 of this
+# ConfigMap is the canonical "policy version" emitted in every EGA evidence
+# record produced by ATK.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "arhiax-runtime.bundlesConfigMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "arhiax-runtime.labels" . | nindent 4 }}
+    arhiax.artifact: "opa-bundles"
+  annotations:
+    arhiax.bundles.count: "19"
+    arhiax.bundles.loc: "2323"
+    arhiax.spec: "TR-2026-033-§4"
+data:
+  # -----------------------------------------------------------------------
+  # authz.rego — packages arhiax.authz (B14 + B16)
+  # -----------------------------------------------------------------------
+  authz.rego: |-
+{{ .Files.Get "files/authz.rego" | indent 4 }}
+
+  # -----------------------------------------------------------------------
+  # bundles_b01_b19.rego — packages arhiax.bXX (17 bundles)
+  # -----------------------------------------------------------------------
+  bundles_b01_b19.rego: |-
+{{ .Files.Get "files/bundles_b01_b19.rego" | indent 4 }}
+{{- end }}

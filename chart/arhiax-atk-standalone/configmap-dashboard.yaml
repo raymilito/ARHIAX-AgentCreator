@@ -1,0 +1,15 @@
+{{- if .Values.metrics.grafanaDashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "arhiax-runtime.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "arhiax-runtime.labels" . | nindent 4 }}
+    {{- with .Values.metrics.grafanaDashboard.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  arhiax-atk-runtime.json: |-
+{{ .Files.Get "dashboards/arhiax-atk-runtime.json" | indent 4 }}
+{{- end }}

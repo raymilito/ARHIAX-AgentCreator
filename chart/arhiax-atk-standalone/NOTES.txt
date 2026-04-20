@@ -1,0 +1,80 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║  ARHIAX v11.4 Runtime — installed                                        ║
+║  Release: {{ .Release.Name }}                                                        
+║  Namespace: {{ .Release.Namespace }}                                                  
+║  Chart version: {{ .Chart.Version }}                                                  
+║  App version: {{ .Chart.AppVersion }}                                                 
+╚══════════════════════════════════════════════════════════════════════════╝
+
+Bundles loaded: 19 (B01-B19)
+Architecture:   ATK reference service + OPA sidecar (same pod)
+Spec anchor:    TR-2026-034 (MasterSpec) + TR-2026-033 (Phase 3)
+
+─── Next steps ───────────────────────────────────────────────────────────────
+
+1. Verify the rollout:
+
+   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "arhiax-runtime.fullname" . }}
+
+2. Check that the 19 bundles loaded into OPA:
+
+   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "arhiax-runtime.fullname" . }} -c opa -- \
+     wget -qO- http://127.0.0.1:{{ .Values.opa.port }}/v1/policies | \
+     python -c "import sys,json; d=json.load(sys.stdin); print('packages:', len(d.get('result',[])))"
+
+3. Smoke test the ATK envelope endpoint:
+{{- if eq .Values.service.type "ClusterIP" }}
+
+   # From inside the cluster:
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "arhiax-runtime.fullname" . }} 8080:{{ .Values.service.port }}
+   curl -sS -X POST http://127.0.0.1:8080/v1/envelope/evaluate \
+     -H 'content-type: application/json' \
+     -d '{"invocationId":"test-001","operationType":"modelInvoke","agentId":"agent-test"}'
+{{- else if eq .Values.service.type "LoadBalancer" }}
+
+   export SERVICE_IP=$(kubectl -n {{ .Release.Namespace }} get svc {{ include "arhiax-runtime.fullname" . }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+   curl -sS -X POST http://$SERVICE_IP:{{ .Values.service.port }}/v1/envelope/evaluate ...
+{{- end }}
+
+{{- if not .Values.opa.decisionLogs.enabled }}
+
+⚠  OPA decision logs are DISABLED.
+   For EGA-C01 compliance (evidence emission), enable them:
+
+     opa.decisionLogs.enabled: true
+     opa.decisionLogs.service.url: https://your-ega-endpoint/
+
+   Without decision logs, this deployment is NOT audit-compliant for
+   production use — it is suitable only for pilot/dev.
+{{- end }}
+
+{{- if eq (.Values.atk.env.ARHIAX_MODE | default "inmemory") "inmemory" }}
+
+⚠  ATK is running in INMEMORY mode.
+   All AIM/BBR/EGA/AUT/HIC calls resolve against in-process reference
+   clients. This is the Capa 2/3 reference runtime — suitable for
+   pilots and integration tests, NOT for production.
+
+   To switch to production backends, set:
+     atk.env.ARHIAX_MODE: production
+     atk.env.ARHIAX_AIM_URL: https://aim.yourcluster.internal
+     atk.env.ARHIAX_BBR_URL: https://bbr.yourcluster.internal
+     atk.env.ARHIAX_EGA_URL: https://ega.yourcluster.internal
+     atk.env.ARHIAX_AUT_URL: https://aut.yourcluster.internal
+     atk.env.ARHIAX_HIC_URL: https://hic.yourcluster.internal
+   (These backends are delivered in Capa 4 — hardened production clients.)
+{{- end }}
+
+─── Audit anchors (share with auditors) ──────────────────────────────────────
+
+  OPA-C02  Policy version tracking:  sha256 of ConfigMap {{ include "arhiax-runtime.bundlesConfigMapName" . }}
+  OPA-C03  Regression testing:       116 pytest + 110 opa test (run locally)
+  ATK-C05  Network segmentation:     NetworkPolicy {{ include "arhiax-runtime.fullname" . }} (default-deny)
+  ATK-C07  Startup attestation:      emitted at Pod startup via ATK _emit_startup_attestation()
+  EGA-C01  Evidence generation:      {{ if .Values.opa.decisionLogs.enabled }}ENABLED via OPA decision logs{{ else }}DISABLED — pilot only{{ end }}
+
+─── Support ──────────────────────────────────────────────────────────────────
+
+  Sinergia Consulting Group S.A.S.
+  Barranquilla, Colombia
+  ray@sinergiaconsulting.co

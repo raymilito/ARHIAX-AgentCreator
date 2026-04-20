@@ -1,0 +1,136 @@
+{{- include "arhiax.validateValues" . -}}
+{{- if .Values.evidenceStore.enabled -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "arhiax.evidenceStore.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.evidenceStore.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "arhiax.evidenceStore.fullname" . }}
+  {{- if eq .Values.evidenceStore.driver "sqlite" }}
+  # SQLite driver is single-writer; force replicas=1 regardless of values.
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  {{- else }}
+  replicas: {{ .Values.evidenceStore.replicaCount }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  {{- end }}
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      {{- include "arhiax.evidenceStore.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "arhiax.evidenceStore.labels" . | nindent 8 }}
+      annotations:
+        arhiax.dev/driver: {{ .Values.evidenceStore.driver | quote }}
+    spec:
+      serviceAccountName: {{ include "arhiax.evidenceStore.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- include "arhiax.imagePullSecrets" (dict "image" .Values.evidenceStore.image "global" .Values.global) | nindent 6 }}
+      {{- with .Values.evidenceStore.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.evidenceStore.podSecurityContext | nindent 8 }}
+      {{- with .Values.evidenceStore.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.evidenceStore.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.evidenceStore.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: evidence-store
+          image: {{ include "arhiax.image" (dict "image" .Values.evidenceStore.image "global" .Values.global) | quote }}
+          imagePullPolicy: {{ .Values.evidenceStore.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.evidenceStore.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.evidenceStore.containerPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.evidenceStore.metricsPort }}
+              protocol: TCP
+          env:
+            - name: ARHIAX_ES_HTTP_PORT
+              value: {{ .Values.evidenceStore.containerPort | quote }}
+            - name: ARHIAX_ES_METRICS_PORT
+              value: {{ .Values.evidenceStore.metricsPort | quote }}
+            - name: ARHIAX_ES_DRIVER
+              value: {{ .Values.evidenceStore.driver | quote }}
+            {{- if eq .Values.evidenceStore.driver "sqlite" }}
+            - name: ARHIAX_ES_SQLITE_PATH
+              value: {{ .Values.evidenceStore.sqlite.dbPath | quote }}
+            {{- else if eq .Values.evidenceStore.driver "postgres" }}
+            - name: ARHIAX_ES_PG_HOST
+              value: {{ .Values.evidenceStore.postgres.host | quote }}
+            - name: ARHIAX_ES_PG_PORT
+              value: {{ .Values.evidenceStore.postgres.port | quote }}
+            - name: ARHIAX_ES_PG_DATABASE
+              value: {{ .Values.evidenceStore.postgres.database | quote }}
+            - name: ARHIAX_ES_PG_SSLMODE
+              value: {{ .Values.evidenceStore.postgres.sslMode | quote }}
+            - name: ARHIAX_ES_PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evidenceStore.postgres.existingSecret }}
+                  key: username
+            - name: ARHIAX_ES_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evidenceStore.postgres.existingSecret }}
+                  key: password
+            {{- end }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- with .Values.evidenceStore.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.evidenceStore.livenessProbe.enabled }}
+          livenessProbe:
+            {{- omit .Values.evidenceStore.livenessProbe "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          {{- if .Values.evidenceStore.readinessProbe.enabled }}
+          readinessProbe:
+            {{- omit .Values.evidenceStore.readinessProbe "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.evidenceStore.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if and (eq .Values.evidenceStore.driver "sqlite") .Values.evidenceStore.persistence.enabled }}
+            - name: data
+              mountPath: /var/lib/arhiax
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if and (eq .Values.evidenceStore.driver "sqlite") .Values.evidenceStore.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "arhiax.evidenceStore.pvcName" . }}
+        {{- end }}
+{{- end }}

@@ -1,0 +1,283 @@
+version: "3.9"
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  ARHIAX AgentCreator — Stack completo de gobernanza                    ║
+# ║                                                                        ║
+# ║  Servicios:                                                            ║
+# ║    creator-api    :8300  ← Fábrica de agentes gobernados (entrar aquí) ║
+# ║    gateway        :8080  ← Policy Enforcement Point                   ║
+# ║    aim-service    :8200  ← Identidad y credenciales                   ║
+# ║    aut-service    :8201  ← Autonomía A0-A4                            ║
+# ║    bbr-service    :8202  ← Línea base conductual                      ║
+# ║    hic-service    :8203  ← Human-in-the-loop checkpoints              ║
+# ║    evidence-store :8090  ← Ledger inmutable de decisiones             ║
+# ║    opa            :8181  ← Motor de políticas OPA/Rego                ║
+# ║                                                                        ║
+# ║  TLS: comunicación inter-servicio cifrada con CA interna.              ║
+# ║  Requisito previo: ejecutar `make certs` para generar los             ║
+# ║  certificados en ./certs/ antes del primer `docker compose up`.        ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+networks:
+  arhiax-net:
+    driver: bridge
+
+volumes:
+  aim-data:
+  aut-data:
+  bbr-data:
+  hic-data:
+  evidence-data:
+  opa-bundles:
+
+# Volumen compartido de certificados (read-only en todos los servicios)
+x-certs-volume: &certs-volume
+  type: bind
+  source: ./certs
+  target: /certs
+  read_only: true
+
+x-python-base: &python-base
+  restart: unless-stopped
+  networks:
+    - arhiax-net
+
+services:
+
+  # ── OPA — Motor de políticas ────────────────────────────────────────────
+  # OPA no soporta TLS nativo sin proxy. Queda en HTTP interno (no expuesto
+  # al host) dentro de la red privada arhiax-net.
+  opa:
+    image: openpolicyagent/opa:0.68.0-rootless
+    command:
+      - run
+      - --server
+      - --addr=0.0.0.0:8181
+      - --log-level=info
+      - /bundles
+    volumes:
+      - ./runtime/bundles:/bundles:ro
+    networks:
+      - arhiax-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8181/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Evidence Store — Ledger inmutable ───────────────────────────────────
+  evidence-store:
+    build:
+      context: ./services/evidence-store
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      LEDGER_PATH: /data/evidence.jsonl
+      EVIDENCE_HMAC_SECRET: ${EVIDENCE_HMAC_SECRET:-arhiax-evidence-secret-CHANGE-ME}
+    volumes:
+      - evidence-data:/data
+      - *certs-volume
+    <<: *python-base
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >
+          if [ -f /certs/evidence-store.crt ]; then
+            curl -sf --cacert /certs/ca.crt https://localhost:8090/healthz;
+          else
+            curl -sf http://localhost:8090/healthz;
+          fi
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── Gateway — Policy Enforcement Point ──────────────────────────────────
+  gateway:
+    build:
+      context: ./services/gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      OPA_URL: http://opa:8181
+      EVIDENCE_STORE_URL: https://evidence-store:8090
+      MAX_REQUEST_BODY_BYTES: "1048576"
+      ARHIAX_CA_CERT: /certs/ca.crt
+    volumes:
+      - *certs-volume
+    depends_on:
+      opa:
+        condition: service_healthy
+      evidence-store:
+        condition: service_healthy
+    <<: *python-base
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >
+          if [ -f /certs/gateway.crt ]; then
+            curl -sf --cacert /certs/ca.crt https://localhost:8080/healthz;
+          else
+            curl -sf http://localhost:8080/healthz;
+          fi
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── AIM Service — Identidad y credenciales ──────────────────────────────
+  aim-service:
+    build:
+      context: ./services/aim-service
+      dockerfile: Dockerfile
+    ports:
+      - "8200:8200"
+    environment:
+      AIM_HMAC_SECRET: ${AIM_HMAC_SECRET:-arhiax-aim-secret-CHANGE-ME}
+      AIM_DB_PATH: /data/aim.db
+    volumes:
+      - aim-data:/data
+      - *certs-volume
+    <<: *python-base
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >
+          if [ -f /certs/aim-service.crt ]; then
+            curl -sf --cacert /certs/ca.crt https://localhost:8200/healthz;
+          else
+            curl -sf http://localhost:8200/healthz;
+          fi
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── AUT Service — Autonomía A0-A4 ───────────────────────────────────────
+  aut-service:
+    build:
+      context: ./services/aut-service
+      dockerfile: Dockerfile
+    ports:
+      - "8201:8201"
+    environment:
+      AUT_DB_PATH: /data/aut.db
+    volumes:
+      - aut-data:/data
+      - *certs-volume
+    <<: *python-base
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >
+          if [ -f /certs/aut-service.crt ]; then
+            curl -sf --cacert /certs/ca.crt https://localhost:8201/healthz;
+          else
+            curl -sf http://localhost:8201/healthz;
+          fi
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── BBR Service — Línea base conductual ────────────────────────────────
+  bbr-service:
+    build:
+      context: ./services/bbr-service
+      dockerfile: Dockerfile
+    ports:
+      - "8202:8202"
+    environment:
+      BBR_DB_PATH: /data/bbr.db
+    volumes:
+      - bbr-data:/data
+      - *certs-volume
+    <<: *python-base
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >
+          if [ -f /certs/bbr-service.crt ]; then
+            curl -sf --cacert /certs/ca.crt https://localhost:8202/healthz;
+          else
+            curl -sf http://localhost:8202/healthz;
+          fi
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── HIC Service — Human-in-the-loop ────────────────────────────────────
+  hic-service:
+    build:
+      context: ./services/hic-service
+      dockerfile: Dockerfile
+    ports:
+      - "8203:8203"
+    environment:
+      HIC_DB_PATH: /data/hic.db
+      HIC_WEBHOOK_URL: ${HIC_WEBHOOK_URL:-}
+    volumes:
+      - hic-data:/data
+      - *certs-volume
+    <<: *python-base
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >
+          if [ -f /certs/hic-service.crt ]; then
+            curl -sf --cacert /certs/ca.crt https://localhost:8203/healthz;
+          else
+            curl -sf http://localhost:8203/healthz;
+          fi
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── Creator API — Fábrica de agentes gobernados ─────────────────────────
+  creator-api:
+    build:
+      context: ./services/creator-api
+      dockerfile: Dockerfile
+    ports:
+      - "8300:8300"
+    environment:
+      AIM_URL: https://aim-service:8200
+      AUT_URL: https://aut-service:8201
+      GATEWAY_URL: https://gateway:8080
+      HIC_URL: https://hic-service:8203
+      ARHIAX_CA_CERT: /certs/ca.crt
+    volumes:
+      - *certs-volume
+    depends_on:
+      gateway:
+        condition: service_healthy
+      aim-service:
+        condition: service_healthy
+      aut-service:
+        condition: service_healthy
+    <<: *python-base
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >
+          if [ -f /certs/creator-api.crt ]; then
+            curl -sf --cacert /certs/ca.crt https://localhost:8300/healthz;
+          else
+            curl -sf http://localhost:8300/healthz;
+          fi
+      interval: 15s
+      timeout: 5s
+      retries: 3

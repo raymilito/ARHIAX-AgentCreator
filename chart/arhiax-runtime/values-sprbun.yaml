@@ -1,0 +1,181 @@
+# =============================================================================
+# ARHIAX Runtime — values-sprbun.yaml
+# =============================================================================
+#
+# Pilot:    PORT-MAS at SPRBUN (Sociedad Portuaria Regional Barranquilla)
+# Spec:     TR-2026-034 MasterSpec §6 use case 1 (Port Logistics)
+# Contact:  Sinergia Consulting Group S.A.S.
+#
+# Profile:
+#   - Multi-agent port logistics governance (vessel scheduling, yard ops,
+#     customs coordination, gate access). B12 port logistics enforcement
+#     is the primary bundle; B14/B16 gate all agent identity and permissions.
+#   - Medium scale: ~40 concurrent agents, peak load during vessel arrival windows.
+#   - Regulatory anchor: Colombian port authority + ISPS Code compliance.
+#   - Air-gapped deployment: ATK runs inside SPRBUN private network; outbound
+#     internet strictly disabled. All upstreams (AIM/OPA/EGA/HIC) are internal.
+#
+# Override pattern:
+#     helm install arhiax-sprbun ./arhiax-runtime \
+#         -f values.yaml \
+#         -f values-sprbun.yaml \
+#         --namespace arhiax-sprbun \
+#         --create-namespace
+# =============================================================================
+
+global:
+  environment: production
+  pilot: sprbun
+  region: co-caribbean
+
+image:
+  repository: sinergia/arhiax-atk
+  tag: "11.4-sprbun"
+  pullPolicy: IfNotPresent
+
+replicaCount: 3
+
+resources:
+  atk:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1500m
+      memory: 1Gi
+  opa:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# ARHIAX mode: production. Clients are hardened against internal SPRBUN infra.
+# ---------------------------------------------------------------------------
+arhiax:
+  mode: production
+
+  clients:
+    aim:
+      url: "http://aim.arhiax-sprbun.svc.cluster.local:8080"
+      tokenSecretRef:
+        name: arhiax-sprbun-secrets
+        key: aim-token
+      timeoutSeconds: 5
+      maxRetries: 3
+      verifyTls: false  # internal mTLS handled at mesh layer
+    opa:
+      url: "http://127.0.0.1:8181"  # sidecar in same Pod
+      timeoutSeconds: 2
+      maxRetries: 2
+    aut:
+      url: "http://aut.arhiax-sprbun.svc.cluster.local:8080"
+      tokenSecretRef:
+        name: arhiax-sprbun-secrets
+        key: aut-token
+    bbr:
+      # BBR is soft-fail; ATK degrades to ALLOW_WITH_MONITORING on outage
+      url: "http://bbr.arhiax-sprbun.svc.cluster.local:8080"
+      timeoutSeconds: 3
+      maxRetries: 2
+    ega:
+      url: "http://ega.arhiax-sprbun.svc.cluster.local:8080"
+      tokenSecretRef:
+        name: arhiax-sprbun-secrets
+        key: ega-token
+      timeoutSeconds: 10  # ledger writes can be slower
+      maxRetries: 5
+    hic:
+      url: "http://hic.arhiax-sprbun.svc.cluster.local:8080"
+      tokenSecretRef:
+        name: arhiax-sprbun-secrets
+        key: hic-token
+
+  # Bundles explicitly enabled for this pilot. B12 is the primary enforcement
+  # bundle (port logistics geofences + vessel-agent correlation).
+  bundles:
+    enabled:
+      - B01  # Baseline envelope validation
+      - B02  # Rate limiting
+      - B03  # Prompt injection detection
+      - B04  # Output filtering
+      - B06  # Cross-agent coordination
+      - B09  # Tool safety
+      - B11  # Data residency (CO only for SPRBUN)
+      - B12  # PORT LOGISTICS — primary enforcement
+      - B14  # AIM Identity
+      - B16  # AIM Permissions
+      - B17  # Audit trail completeness
+      - B18  # Incident response
+      - B19  # Change management
+    # B13 (PII/GDPR) disabled — SPRBUN handles no EU data
+    # B15 (lifecycle) runs in governance plane, not runtime
+
+# ---------------------------------------------------------------------------
+# HPA: port ops have predictable arrival-window bursts
+# ---------------------------------------------------------------------------
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 65
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 30
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# ---------------------------------------------------------------------------
+# Network policy: air-gapped — NO egress to internet, only internal services
+# ---------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  egress:
+    allowInternet: false  # CRITICAL: SPRBUN is air-gapped
+    allowedNamespaces:
+      - arhiax-sprbun
+      - kube-system  # DNS only
+      - monitoring
+
+ingress:
+  enabled: true
+  className: nginx-internal
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: arhiax.sprbun.internal
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: arhiax-sprbun-tls
+      hosts:
+        - arhiax.sprbun.internal
+
+# ---------------------------------------------------------------------------
+# Observability: Grafana dashboards exposed to SPRBUN NOC
+# ---------------------------------------------------------------------------
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  labels:
+    release: prometheus-sprbun
+
+grafana:
+  dashboard:
+    enabled: true
+    folder: "ARHIAX / SPRBUN"
+
+# Pilot-specific labels propagated to all resources
+podLabels:
+  pilot: sprbun
+  criticality: high
+  data-residency: co
+  vessel-ops: "true"

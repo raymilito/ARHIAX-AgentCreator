@@ -1,0 +1,187 @@
+{{- if .Values.networkPolicy.enabled -}}
+---
+# -----------------------------------------------------------------------------
+# Gateway NetworkPolicy
+# Ingress: from allowedIngressSelectors (e.g., app namespaces) on http port.
+# Egress:  to OPA (in-cluster), to evidence store (in-cluster), to DNS,
+#          and to allowedEgressCIDRs (e.g., external IdP, bundle server).
+# -----------------------------------------------------------------------------
+{{- if .Values.gateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "arhiax.gateway.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "arhiax.gateway.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.allowedIngressSelectors }}
+        - {{ toYaml . | nindent 10 | trim }}
+        {{- end }}
+        {{- if not .Values.networkPolicy.allowedIngressSelectors }}
+        - namespaceSelector: {}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.containerPort }}
+    # Allow Prometheus scrape from any pod in the cluster on the metrics port.
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.metricsPort }}
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # OPA (in-cluster)
+    {{- if .Values.opa.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "arhiax.opa.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.opa.containerPort }}
+    {{- end }}
+    # Evidence store (in-cluster)
+    {{- if .Values.evidenceStore.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "arhiax.evidenceStore.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.evidenceStore.containerPort }}
+    {{- end }}
+    # External CIDRs (IdP, bundle server, OTEL collector, etc.)
+    {{- with .Values.networkPolicy.allowedEgressCIDRs }}
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+{{- end }}
+---
+# -----------------------------------------------------------------------------
+# OPA NetworkPolicy
+# Ingress: from gateway pods only on http port; from anywhere on diagnostic
+#          port for Prometheus scrape.
+# Egress:  DNS + bundle server (external CIDRs, if mode=server).
+# -----------------------------------------------------------------------------
+{{- if .Values.opa.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "arhiax.opa.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.opa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "arhiax.opa.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.gateway.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "arhiax.gateway.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.opa.containerPort }}
+    {{- end }}
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.opa.diagnosticPort }}
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if and (eq .Values.opa.bundleSource.mode "server") .Values.networkPolicy.allowedEgressCIDRs }}
+    - to:
+        {{- range .Values.networkPolicy.allowedEgressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+{{- end }}
+---
+# -----------------------------------------------------------------------------
+# Evidence Store NetworkPolicy
+# Ingress: from gateway pods only on http port; diagnostic from anywhere.
+# Egress:  DNS + (if driver=postgres) external CIDRs for the DB.
+# -----------------------------------------------------------------------------
+{{- if .Values.evidenceStore.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "arhiax.evidenceStore.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.evidenceStore.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "arhiax.evidenceStore.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.gateway.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "arhiax.gateway.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.evidenceStore.containerPort }}
+    {{- end }}
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.evidenceStore.metricsPort }}
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if and (eq .Values.evidenceStore.driver "postgres") .Values.networkPolicy.allowedEgressCIDRs }}
+    - to:
+        {{- range .Values.networkPolicy.allowedEgressCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.evidenceStore.postgres.port }}
+    {{- end }}
+{{- end }}
+{{- end }}

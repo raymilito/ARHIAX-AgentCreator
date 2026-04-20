@@ -1,0 +1,229 @@
+# =============================================================================
+# ARHIAX Runtime — values-brasil-fintech.yaml
+# =============================================================================
+#
+# Pilot:    ARHIAX Brasil — PSAV (Provedor de Serviços de Ativos Virtuais)
+#           target market, ahead of the October 30, 2026 BCB authorization
+#           deadline. Covers 7 financial verticals: Pix fraud, AML/KYC,
+#           onboarding, regulatory reporting, credit decisioning, smart
+#           contract monitoring, robo-advisory.
+# Spec:     TR-2026-034 MasterSpec §6 use case 2 (BCB Brasil)
+# Contact:  Bolder (Rio de Janeiro innovation agency) — primary ally
+#
+# Profile:
+#   - Zero Data Exposure (ZDE) deployment model: ATK MUST NOT persist or
+#     transmit raw PII or transaction content. Only hashes, flags, and
+#     policy decisions cross the ATK boundary.
+#   - B13 (PII/LGPD) is enforced in STRICT mode — any payload containing
+#     Brazilian tax IDs (CPF/CNPJ), full names, or card numbers without
+#     tokenization is denied with incident.
+#   - High-throughput fintech workload: ~2,000 concurrent agents during
+#     Pix peak windows. Aggressive HPA with fast scale-up.
+#   - Multi-tenant: single ATK serves multiple PSAV customers; B14/B16
+#     enforce strict tenant isolation via tenantId claim.
+#   - LGPD data residency: all upstreams MUST be in br-southeast (São Paulo)
+#     or br-northeast (Fortaleza) regions.
+#
+# Override pattern:
+#     helm install arhiax-br ./arhiax-runtime \
+#         -f values.yaml \
+#         -f values-brasil-fintech.yaml \
+#         --namespace arhiax-brasil \
+#         --create-namespace
+# =============================================================================
+
+global:
+  environment: production
+  pilot: brasil-fintech
+  region: br-southeast
+  dataResidency: br
+
+image:
+  repository: sinergia/arhiax-atk
+  tag: "11.4-brasil"
+  pullPolicy: IfNotPresent
+
+# Higher baseline — fintech Pix traffic is always hot
+replicaCount: 5
+
+resources:
+  atk:
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+    limits:
+      cpu: 3000m
+      memory: 2Gi
+  opa:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# ---------------------------------------------------------------------------
+# ARHIAX mode: production, with ZDE enforcement
+# ---------------------------------------------------------------------------
+arhiax:
+  mode: production
+
+  # ZDE (Zero Data Exposure) — critical flag. Enforces:
+  #   - No payload body in EGA ledger entries (only hashes)
+  #   - No payload body in HIC tickets (only references)
+  #   - B13 STRICT mode (see bundles below)
+  zde:
+    enabled: true
+    strictPayloadRedaction: true
+    allowedHashAlgorithms:
+      - sha256
+      - blake2b
+
+  clients:
+    aim:
+      url: "https://aim.arhiax.com.br:8443"
+      tokenSecretRef:
+        name: arhiax-br-secrets
+        key: aim-token
+      timeoutSeconds: 3  # fintech SLO: sub-100ms envelope
+      maxRetries: 2
+      verifyTls: true
+    opa:
+      url: "http://127.0.0.1:8181"  # sidecar
+      timeoutSeconds: 1
+      maxRetries: 1
+    aut:
+      url: "https://aut.arhiax.com.br:8443"
+      tokenSecretRef:
+        name: arhiax-br-secrets
+        key: aut-token
+      timeoutSeconds: 2
+    bbr:
+      url: "https://bbr.arhiax.com.br:8443"
+      tokenSecretRef:
+        name: arhiax-br-secrets
+        key: bbr-token
+      timeoutSeconds: 2
+      maxRetries: 1  # fail fast to ALLOW_WITH_MONITORING
+    ega:
+      url: "https://ega.arhiax.com.br:8443"
+      tokenSecretRef:
+        name: arhiax-br-secrets
+        key: ega-token
+      timeoutSeconds: 5
+      maxRetries: 3
+    hic:
+      url: "https://hic.arhiax.com.br:8443"
+      tokenSecretRef:
+        name: arhiax-br-secrets
+        key: hic-token
+
+  # STRICT mode: B13 denies any payload containing CPF/CNPJ/card numbers
+  # without upstream tokenization. B11 enforces br-only data residency.
+  bundles:
+    enabled:
+      - B01
+      - B02
+      - B03  # prompt injection — strict for robo-advisory
+      - B04
+      - B05  # output PII scrubbing
+      - B06
+      - B07  # schema validation for Pix payloads
+      - B09  # tool safety — no fileWrite, no external HTTP
+      - B10  # financial transaction integrity
+      - B11  # data residency — STRICT br only
+      - B13  # LGPD/PII — STRICT
+      - B14
+      - B16
+      - B17  # audit trail — required by BCB
+      - B18
+      - B19
+    config:
+      B11:
+        allowedRegions: ["br-southeast", "br-northeast"]
+        strict: true
+      B13:
+        mode: strict
+        detectors:
+          - cpf
+          - cnpj
+          - card_pan
+          - full_name_br
+        denyOnDetection: true
+      B17:
+        retentionDays: 2555  # 7 years per BCB Res. 4,658
+
+# ---------------------------------------------------------------------------
+# HPA: aggressive — Pix windows create 10x spikes in seconds
+# ---------------------------------------------------------------------------
+autoscaling:
+  enabled: true
+  minReplicas: 5
+  maxReplicas: 50
+  targetCPUUtilizationPercentage: 55
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 15  # fast scale-up
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 600  # conservative scale-down
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 3
+
+# ---------------------------------------------------------------------------
+# Multi-tenancy — enforce tenant isolation at network layer
+# ---------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  egress:
+    allowInternet: false
+    allowedCidrs:
+      - "10.100.0.0/16"  # arhiax-br VPC
+      - "10.101.0.0/16"  # bcb reporting endpoints
+  ingress:
+    allowedNamespaces:
+      - arhiax-brasil
+      - monitoring
+
+ingress:
+  enabled: true
+  className: nginx-external
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # rate limiting at ingress — defense in depth
+    nginx.ingress.kubernetes.io/limit-rps: "500"
+    nginx.ingress.kubernetes.io/limit-connections: "100"
+  hosts:
+    - host: atk.arhiax.com.br
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: arhiax-br-tls
+      hosts:
+        - atk.arhiax.com.br
+
+serviceMonitor:
+  enabled: true
+  interval: 10s  # high-frequency scraping for fintech SLOs
+  labels:
+    release: prometheus-brasil
+
+grafana:
+  dashboard:
+    enabled: true
+    folder: "ARHIAX / Brasil"
+
+podLabels:
+  pilot: brasil-fintech
+  criticality: critical
+  data-residency: br
+  lgpd-scope: "true"
+  bcb-authorization-track: "true"

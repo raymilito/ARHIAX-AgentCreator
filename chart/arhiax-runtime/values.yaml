@@ -1,0 +1,420 @@
+# =============================================================================
+# ARHIAX Runtime - Community Edition v1.0.0
+# Default values for arhiax-runtime Helm chart
+# =============================================================================
+#
+# This file is the public contract of the chart. Every template reads from
+# here. Override any value with --set or -f my-values.yaml at install time.
+#
+# Component topology (CE):
+#   gateway        -> ingress/API for agent events and control-plane calls
+#   opa            -> policy engine with embedded Rego bundles (ConfigMap)
+#   evidenceStore  -> append-only evidence log (SQLite on PVC by default)
+#   correlator     -> optional D-TCG+ cross-domain correlator (subchart)
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Global settings shared across all components
+# -----------------------------------------------------------------------------
+global:
+  # Image registry used if a component does not override it
+  imageRegistry: ""
+  # Image pull secrets applied to all pods
+  imagePullSecrets: []
+  # Default storage class for PVCs (empty = cluster default)
+  storageClass: ""
+  # Cluster domain, used to build in-cluster service DNS names
+  clusterDomain: cluster.local
+  # Common labels applied to every resource
+  commonLabels: {}
+  # Common annotations applied to every resource
+  commonAnnotations: {}
+
+# -----------------------------------------------------------------------------
+# Naming overrides
+# -----------------------------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+
+# -----------------------------------------------------------------------------
+# ARHIAX Gateway
+# -----------------------------------------------------------------------------
+# The gateway is the north-south entry point for agent events. It authenticates
+# callers, forwards policy decisions to OPA, and writes evidence records to the
+# evidence store.
+# -----------------------------------------------------------------------------
+gateway:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    registry: ghcr.io
+    repository: arhiax/arhiax-gateway
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+    pullSecrets: []
+
+  # Container port the gateway listens on
+  containerPort: 8080
+  # Metrics port (Prometheus /metrics)
+  metricsPort: 9090
+
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+    annotations: {}
+    # Only used when type is LoadBalancer or NodePort
+    nodePort: ""
+    loadBalancerIP: ""
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: arhiax.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable: ""
+
+  # Liveness / readiness / startup probes
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startupProbe:
+    enabled: false
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 10
+    failureThreshold: 30
+
+  # Environment variables injected into the gateway container
+  extraEnv: []
+  # Extra env from ConfigMaps / Secrets
+  extraEnvFrom: []
+  # Additional volumes / volumeMounts
+  extraVolumes: []
+  extraVolumeMounts: []
+
+  # Pod-level scheduling
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+  # Pod / container security
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  # ARHIAX-specific configuration
+  config:
+    logLevel: info
+    logFormat: json
+    # URL of the OPA sidecar/service (resolved at template time if empty)
+    opaUrl: ""
+    # URL of the evidence store (resolved at template time if empty)
+    evidenceStoreUrl: ""
+    # Accepted audiences for incoming JWTs
+    jwtAudiences:
+      - arhiax
+    # Max request body size
+    maxRequestBodyBytes: 1048576
+    # Rate limiting (requests per second, per client)
+    rateLimitRps: 100
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+    automountServiceAccountToken: true
+
+# -----------------------------------------------------------------------------
+# OPA Policy Engine
+# -----------------------------------------------------------------------------
+# OPA runs as an in-cluster service. Rego bundles are loaded from a ConfigMap
+# generated by this chart (default) OR from an external bundle server if
+# opa.bundleServer.enabled=true.
+# -----------------------------------------------------------------------------
+opa:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    registry: docker.io
+    repository: openpolicyagent/opa
+    tag: "0.68.0-rootless"
+    pullPolicy: IfNotPresent
+    pullSecrets: []
+
+  containerPort: 8181
+  diagnosticPort: 8282
+
+  service:
+    type: ClusterIP
+    port: 8181
+    annotations: {}
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # Bundle source - choose ONE
+  bundleSource:
+    # configmap: bundles embedded in the chart, mounted from a ConfigMap.
+    # server:    OPA pulls bundles from an external bundle server.
+    mode: configmap
+
+  # Configuration for mode=configmap
+  bundleConfigMap:
+    # If create=true, the chart generates a ConfigMap from files in
+    # files/policies/*.rego. If false, an existing ConfigMap can be used.
+    create: true
+    existingConfigMap: ""
+
+  # Configuration for mode=server
+  bundleServer:
+    enabled: false
+    url: ""
+    polling:
+      minDelaySeconds: 60
+      maxDelaySeconds: 120
+    credentials:
+      # Name of a Secret containing a 'token' key for bearer auth
+      existingSecret: ""
+
+  # OPA decision logging
+  decisionLogs:
+    enabled: true
+    console: true
+
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /health?bundle=true
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 20
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /health?bundle=true
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+  extraArgs: []
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10002
+    runAsGroup: 10002
+    fsGroup: 10002
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+# -----------------------------------------------------------------------------
+# Evidence Store
+# -----------------------------------------------------------------------------
+# Append-only evidence log. In CE this defaults to SQLite on a PVC to keep the
+# chart self-contained (no external Postgres dependency). For production, set
+# driver=postgres and point it at an external database.
+# -----------------------------------------------------------------------------
+evidenceStore:
+  enabled: true
+  replicaCount: 1  # SQLite driver is single-writer; ignored when driver=postgres
+
+  image:
+    registry: ghcr.io
+    repository: arhiax/arhiax-evidence-store
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+    pullSecrets: []
+
+  containerPort: 8090
+  metricsPort: 9091
+
+  service:
+    type: ClusterIP
+    port: 8090
+    annotations: {}
+
+  # Storage driver: sqlite (default, CE) or postgres
+  driver: sqlite
+
+  sqlite:
+    # Path inside the container where the SQLite DB lives
+    dbPath: /var/lib/arhiax/evidence.db
+
+  postgres:
+    # Used only when driver=postgres
+    host: ""
+    port: 5432
+    database: arhiax_evidence
+    sslMode: require
+    # Secret containing 'username' and 'password' keys
+    existingSecret: ""
+
+  persistence:
+    enabled: true
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    annotations: {}
+    # Existing PVC to use instead of creating one
+    existingClaim: ""
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10003
+    runAsGroup: 10003
+    fsGroup: 10003
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+# -----------------------------------------------------------------------------
+# D-TCG+ Correlator (OPTIONAL subchart - disabled by default in CE)
+# -----------------------------------------------------------------------------
+correlator:
+  enabled: false
+  # All further configuration lives in charts/correlator/values.yaml
+
+# -----------------------------------------------------------------------------
+# Observability
+# -----------------------------------------------------------------------------
+metrics:
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    relabelings: []
+    metricRelabelings: []
+
+# -----------------------------------------------------------------------------
+# Network policies
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+  # Allow ingress from pods with these labels (e.g., application namespaces)
+  allowedIngressSelectors: []
+  # Allow egress to these CIDRs (e.g., external bundle server, Postgres)
+  allowedEgressCIDRs: []
+
+# -----------------------------------------------------------------------------
+# RBAC
+# -----------------------------------------------------------------------------
+rbac:
+  create: true

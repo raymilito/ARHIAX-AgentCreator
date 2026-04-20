@@ -1,0 +1,840 @@
+{
+  "metadata": {
+    "framework": "ARHIA",
+    "version": "11.4",
+    "documentId": "TR-2026-031-CR",
+    "title": "ARHIA v11.4 Auditable Control Registry",
+    "generatedDate": "2026-04-04",
+    "totalControls": 36,
+    "totalSubsystems": 8,
+    "model": "ARISE 4-Question Assurance Model",
+    "author": "Sinergia Consulting Group S.A.S.",
+    "classification": "Confidential"
+  },
+  "evidenceTypes": {
+    "LOG": {
+      "name": "Operational Log",
+      "description": "Timestamped system event log with HMAC chain integrity",
+      "retentionDefault": "Tier2"
+    },
+    "ATT": {
+      "name": "Attestation",
+      "description": "Cryptographic proof of policy evaluation or identity verification",
+      "retentionDefault": "Tier1"
+    },
+    "MET": {
+      "name": "Metric Report",
+      "description": "Quantitative performance or deviation measurement",
+      "retentionDefault": "Tier2"
+    },
+    "APR": {
+      "name": "Approval Record",
+      "description": "Human-in-the-loop authorization with signer identity",
+      "retentionDefault": "Tier1"
+    },
+    "TST": {
+      "name": "Test Result",
+      "description": "Validation or qualification test execution output",
+      "retentionDefault": "Tier3"
+    }
+  },
+  "retentionTiers": {
+    "Tier1": {
+      "years": 7,
+      "scope": "Safety-critical, regulatory compliance, audit evidence"
+    },
+    "Tier2": {
+      "years": 3,
+      "scope": "Security events, operational decisions, policy evaluations"
+    },
+    "Tier3": {
+      "years": 1,
+      "scope": "Routine telemetry, periodic baselines, informational logs"
+    }
+  },
+  "ownerRoles": {
+    "GOV": "Governance Lead",
+    "SEC": "Security Lead",
+    "ENG": "Engineering Lead",
+    "OPS": "Operations Lead",
+    "AUD": "Audit Lead"
+  },
+  "subsystems": [
+    {
+      "id": "ATK",
+      "name": "Agent Trust Kernel",
+      "controlCount": 7,
+      "newInV114": 1,
+      "controls": [
+        {
+          "controlId": "ATK-C01",
+          "name": "5-Check Envelope Validation",
+          "newInV114": false,
+          "whatIsImplemented": "Every agent request passes through a 5-check envelope: identity verification, permission scope, autonomy level, policy compliance, and HMAC integrity.",
+          "whoIsResponsible": "ENG",
+          "whatEvidenceGenerated": [
+            "ATT",
+            "LOG"
+          ],
+          "howOftenValidated": "Every request (real-time); audit review quarterly",
+          "opaBundle": "B03",
+          "crosswalks": {
+            "ARISE": "PROTECT",
+            "OWASP": "ASI-03",
+            "CSA_ATF": "E1",
+            "MGF": "Dim2",
+            "NIST_CSF": "PR"
+          }
+        },
+        {
+          "controlId": "ATK-C02",
+          "name": "Agent Scope Boundary Enforcement",
+          "newInV114": false,
+          "whatIsImplemented": "Runtime enforcement of agent permission boundaries preventing lateral movement or privilege escalation beyond assigned scope.",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "ATT",
+            "LOG"
+          ],
+          "howOftenValidated": "Every request (real-time); penetration test semi-annually",
+          "opaBundle": "B03",
+          "crosswalks": {
+            "ARISE": "PROTECT",
+            "OWASP": "ASI-03",
+            "CSA_ATF": "E3",
+            "MGF": "Dim2",
+            "NIST_CSF": "PR"
+          }
+        },
+        {
+          "controlId": "ATK-C03",
+          "name": "Input Sanitization Gate",
+          "newInV114": false,
+          "whatIsImplemented": "All agent inputs validated against schema definitions and injection patterns before processing.",
+          "whoIsResponsible": "ENG",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "MET"
+          ],
+          "howOftenValidated": "Every request (real-time); pattern library updated monthly",
+          "opaBundle": "B03",
+          "crosswalks": {
+            "ARISE": "PROTECT",
+            "OWASP": "ASI-01",
+            "CSA_ATF": "E4",
+            "MGF": "Dim3",
+            "NIST_CSF": "PR"
+          }
+        },
+        {
+          "controlId": "ATK-C04",
+          "name": "Output Validation Gate",
+          "newInV114": false,
+          "whatIsImplemented": "All agent outputs validated for policy compliance, data leakage, and format integrity before delivery to downstream consumers.",
+          "whoIsResponsible": "ENG",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "MET"
+          ],
+          "howOftenValidated": "Every request (real-time); output schema review quarterly",
+          "opaBundle": "B03",
+          "crosswalks": {
+            "ARISE": "PROTECT",
+            "OWASP": "ASI-07",
+            "CSA_ATF": "E4",
+            "MGF": "Dim3",
+            "NIST_CSF": "PR"
+          }
+        },
+        {
+          "controlId": "ATK-C05",
+          "name": "6-Outcome Decision Routing",
+          "newInV114": false,
+          "whatIsImplemented": "ATK produces exactly one of 6 outcomes per evaluation: ALLOW, DENY, ESCALATE, QUARANTINE, AUDIT, DEGRADE. Each outcome triggers deterministic downstream action.",
+          "whoIsResponsible": "GOV",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "ATT"
+          ],
+          "howOftenValidated": "Every request (real-time); outcome distribution analysis monthly",
+          "opaBundle": "B03",
+          "crosswalks": {
+            "ARISE": "RESPOND",
+            "OWASP": "ASI-05",
+            "CSA_ATF": "E5",
+            "MGF": "Dim4",
+            "NIST_CSF": "RS"
+          }
+        },
+        {
+          "controlId": "ATK-C06",
+          "name": "HMAC Chain Integrity",
+          "newInV114": false,
+          "whatIsImplemented": "All trust decisions recorded in append-only HMAC-chained ledger preventing retroactive tampering.",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "ATT"
+          ],
+          "howOftenValidated": "Continuous (real-time verification); integrity audit quarterly",
+          "opaBundle": "B03",
+          "crosswalks": {
+            "ARISE": "DETECT",
+            "OWASP": "ASI-08",
+            "CSA_ATF": "E2",
+            "MGF": "Dim2",
+            "NIST_CSF": "DE"
+          }
+        },
+        {
+          "controlId": "ATK-C07",
+          "name": "Cross-Domain Trust Propagation",
+          "newInV114": true,
+          "whatIsImplemented": "Trust decisions propagated across agent collaboration boundaries with scope attenuation: delegated agents inherit reduced trust ceiling.",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "ATT",
+            "LOG"
+          ],
+          "howOftenValidated": "Every delegation event; trust propagation audit quarterly",
+          "opaBundle": "B03",
+          "crosswalks": {
+            "ARISE": "PROTECT",
+            "OWASP": "ASI-03",
+            "CSA_ATF": "E1,E3",
+            "MGF": "Dim2",
+            "NIST_CSF": "PR"
+          }
+        }
+      ]
+    },
+    {
+      "id": "DTG",
+      "name": "D-TCG+ (Defensive Tool Call Graph)",
+      "controlCount": 5,
+      "newInV114": 3,
+      "controls": [
+        {
+          "controlId": "DTG-C01",
+          "name": "Trajectory Logging",
+          "newInV114": false,
+          "whatIsImplemented": "Complete tool call trajectory captured with caller identity, parameters, return values, and timing for every agent action.",
+          "whoIsResponsible": "ENG",
+          "whatEvidenceGenerated": [
+            "LOG"
+          ],
+          "howOftenValidated": "Continuous (real-time); log completeness audit monthly",
+          "opaBundle": "B04",
+          "crosswalks": {
+            "ARISE": "DETECT",
+            "OWASP": "ASI-04",
+            "CSA_ATF": "E2",
+            "MGF": "Dim3",
+            "NIST_CSF": "DE"
+          }
+        },
+        {
+          "controlId": "DTG-C02",
+          "name": "Anomaly Detection",
+          "newInV114": false,
+          "whatIsImplemented": "Statistical deviation detection on tool call patterns against established behavioral baselines.",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "MET",
+            "LOG"
+          ],
+          "howOftenValidated": "Continuous (real-time); detection threshold tuning monthly",
+          "opaBundle": "B04",
+          "crosswalks": {
+            "ARISE": "DETECT",
+            "OWASP": "ASI-04",
+            "CSA_ATF": "E2",
+            "MGF": "Dim3",
+            "NIST_CSF": "DE"
+          }
+        },
+        {
+          "controlId": "DTG-C03",
+          "name": "Cross-Layer Anomaly Correlation (CLAS)",
+          "newInV114": true,
+          "whatIsImplemented": "4-layer telemetry correlation engine computing weighted anomaly scores across Network, Prompt, Tool Call, and Data Access layers. CLAS = Σ(w_i × anomaly_score_i).",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "MET",
+            "LOG"
+          ],
+          "howOftenValidated": "Continuous (3 temporal windows: 60s, 15min, 24h); weight calibration quarterly",
+          "opaBundle": "B17",
+          "crosswalks": {
+            "ARISE": "DETECT",
+            "OWASP": "ASI-04,ASI-08",
+            "CSA_ATF": "E2",
+            "MGF": "Dim3",
+            "NIST_CSF": "DE"
+          }
+        },
+        {
+          "controlId": "DTG-C04",
+          "name": "Behavioral Baseline Registry (BBR)",
+          "newInV114": true,
+          "whatIsImplemented": "Per-agent behavioral profiles with 11-field schema tracking tool call, data access, prompt, and network patterns. Deviation thresholds scaled by autonomy level (A1=2.0σ to A4=3.5σ).",
+          "whoIsResponsible": "OPS",
+          "whatEvidenceGenerated": [
+            "MET",
+            "TST"
+          ],
+          "howOftenValidated": "Baseline update: scheduled (30d), change-triggered, post-incident; full review quarterly",
+          "opaBundle": "B17",
+          "crosswalks": {
+            "ARISE": "IDENTIFY",
+            "OWASP": "ASI-04",
+            "CSA_ATF": "E2",
+            "MGF": "Dim3",
+            "NIST_CSF": "ID"
+          }
+        },
+        {
+          "controlId": "DTG-C05",
+          "name": "Playbook Dispatch Engine",
+          "newInV114": true,
+          "whatIsImplemented": "Automated incident response dispatch matching correlation rules (CR-01 to CR-10) to OWASP ASI playbooks (PB-01 to PB-10). 6-phase execution: Detection → Containment → Investigation → Remediation → Recovery → Lessons Learned.",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "APR"
+          ],
+          "howOftenValidated": "Every incident trigger; playbook drill quarterly; full tabletop semi-annually",
+          "opaBundle": "B17",
+          "crosswalks": {
+            "ARISE": "RESPOND",
+            "OWASP": "ASI-01 to ASI-10",
+            "CSA_ATF": "E5",
+            "MGF": "Dim4",
+            "NIST_CSF": "RS"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ABO",
+      "name": "AIBOM (AI Bill of Materials)",
+      "controlCount": 3,
+      "newInV114": 0,
+      "controls": [
+        {
+          "controlId": "ABO-C01",
+          "name": "Component Inventory",
+          "newInV114": false,
+          "whatIsImplemented": "Complete inventory of all AI components: models, datasets, tools, dependencies with version tracking and provenance chain.",
+          "whoIsResponsible": "ENG",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "ATT"
+          ],
+          "howOftenValidated": "On every deployment; full inventory audit quarterly",
+          "opaBundle": "B11",
+          "crosswalks": {
+            "ARISE": "IDENTIFY",
+            "OWASP": "ASI-10",
+            "CSA_ATF": "E1",
+            "MGF": "Dim1",
+            "NIST_CSF": "ID"
+          }
+        },
+        {
+          "controlId": "ABO-C02",
+          "name": "Supply Chain Verification",
+          "newInV114": false,
+          "whatIsImplemented": "Cryptographic verification of model and tool provenance. Hash-based integrity checks on all AIBOM components before deployment.",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "ATT",
+            "TST"
+          ],
+          "howOftenValidated": "Every deployment; supply chain scan monthly",
+          "opaBundle": "B11",
+          "crosswalks": {
+            "ARISE": "PROTECT",
+            "OWASP": "ASI-10",
+            "CSA_ATF": "E1",
+            "MGF": "Dim1",
+            "NIST_CSF": "PR"
+          }
+        },
+        {
+          "controlId": "ABO-C03",
+          "name": "Lifecycle State Management",
+          "newInV114": false,
+          "whatIsImplemented": "AIBOM components tracked through lifecycle states: Draft → Qualified → Active → Deprecated → Retired with mandatory transition approvals.",
+          "whoIsResponsible": "GOV",
+          "whatEvidenceGenerated": [
+            "APR",
+            "LOG"
+          ],
+          "howOftenValidated": "On every state transition; lifecycle compliance audit quarterly",
+          "opaBundle": "B11",
+          "crosswalks": {
+            "ARISE": "MANAGE",
+            "OWASP": "ASI-10",
+            "CSA_ATF": "E1",
+            "MGF": "Dim1",
+            "NIST_CSF": "GV"
+          }
+        }
+      ]
+    },
+    {
+      "id": "HIC",
+      "name": "Human-in-the-Loop Checkpoints",
+      "controlCount": 5,
+      "newInV114": 0,
+      "controls": [
+        {
+          "controlId": "HIC-C01",
+          "name": "Pre-Execution Approval Gate",
+          "newInV114": false,
+          "whatIsImplemented": "Mandatory human approval before execution of actions classified as high-impact or exceeding agent autonomy level.",
+          "whoIsResponsible": "GOV",
+          "whatEvidenceGenerated": [
+            "APR"
+          ],
+          "howOftenValidated": "Every gate trigger; gate bypass audit monthly",
+          "opaBundle": "B05",
+          "crosswalks": {
+            "ARISE": "GOVERN",
+            "OWASP": "ASI-09",
+            "CSA_ATF": "E3",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "HIC-C02",
+          "name": "Escalation Routing",
+          "newInV114": false,
+          "whatIsImplemented": "Deterministic routing of ESCALATE outcomes to designated human supervisors based on domain, severity, and time-of-day rules.",
+          "whoIsResponsible": "OPS",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "APR"
+          ],
+          "howOftenValidated": "Every escalation event; routing accuracy audit monthly",
+          "opaBundle": "B05",
+          "crosswalks": {
+            "ARISE": "RESPOND",
+            "OWASP": "ASI-09",
+            "CSA_ATF": "E3",
+            "MGF": "Dim4",
+            "NIST_CSF": "RS"
+          }
+        },
+        {
+          "controlId": "HIC-C03",
+          "name": "Override Documentation",
+          "newInV114": false,
+          "whatIsImplemented": "All human overrides of automated decisions captured with justification, signer identity, and scope of override.",
+          "whoIsResponsible": "AUD",
+          "whatEvidenceGenerated": [
+            "APR",
+            "LOG"
+          ],
+          "howOftenValidated": "Every override event; override pattern analysis quarterly",
+          "opaBundle": "B05",
+          "crosswalks": {
+            "ARISE": "GOVERN",
+            "OWASP": "ASI-09",
+            "CSA_ATF": "E5",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "HIC-C04",
+          "name": "Checkpoint SLA Monitoring",
+          "newInV114": false,
+          "whatIsImplemented": "SLA tracking for human response times at checkpoints with automatic DEGRADE fallback if approval timeout exceeded.",
+          "whoIsResponsible": "OPS",
+          "whatEvidenceGenerated": [
+            "MET",
+            "LOG"
+          ],
+          "howOftenValidated": "Continuous (real-time); SLA compliance report weekly",
+          "opaBundle": "B05",
+          "crosswalks": {
+            "ARISE": "MANAGE",
+            "OWASP": "ASI-09",
+            "CSA_ATF": "E5",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "HIC-C05",
+          "name": "Feedback Loop Integration",
+          "newInV114": false,
+          "whatIsImplemented": "Human checkpoint decisions feed back into agent behavioral baselines and policy refinement pipeline.",
+          "whoIsResponsible": "GOV",
+          "whatEvidenceGenerated": [
+            "MET"
+          ],
+          "howOftenValidated": "Monthly feedback loop review; impact analysis quarterly",
+          "opaBundle": "B05",
+          "crosswalks": {
+            "ARISE": "MANAGE",
+            "OWASP": "ASI-09",
+            "CSA_ATF": "E2",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        }
+      ]
+    },
+    {
+      "id": "OPA",
+      "name": "OPA/Rego Policy Engine",
+      "controlCount": 4,
+      "newInV114": 1,
+      "controls": [
+        {
+          "controlId": "OPA-C01",
+          "name": "Policy Evaluation Gate",
+          "newInV114": false,
+          "whatIsImplemented": "Every agent action evaluated against OPA/Rego policy bundles before execution. Deny-by-default with explicit allow rules.",
+          "whoIsResponsible": "ENG",
+          "whatEvidenceGenerated": [
+            "ATT",
+            "LOG"
+          ],
+          "howOftenValidated": "Every request (real-time); policy coverage audit monthly",
+          "opaBundle": "B01",
+          "crosswalks": {
+            "ARISE": "PROTECT",
+            "OWASP": "ASI-02",
+            "CSA_ATF": "E4",
+            "MGF": "Dim2",
+            "NIST_CSF": "PR"
+          }
+        },
+        {
+          "controlId": "OPA-C02",
+          "name": "Policy Version Control",
+          "newInV114": false,
+          "whatIsImplemented": "All policy bundles version-controlled with immutable history. Policy changes require dual approval and staged rollout.",
+          "whoIsResponsible": "GOV",
+          "whatEvidenceGenerated": [
+            "APR",
+            "LOG"
+          ],
+          "howOftenValidated": "Every policy change; version integrity audit quarterly",
+          "opaBundle": "B01",
+          "crosswalks": {
+            "ARISE": "MANAGE",
+            "OWASP": "ASI-02",
+            "CSA_ATF": "E2",
+            "MGF": "Dim2",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "OPA-C03",
+          "name": "Policy Hot-Reload with Rollback",
+          "newInV114": true,
+          "whatIsImplemented": "Runtime policy updates without service interruption. Canary deployment with automatic rollback if error rate exceeds threshold within observation window.",
+          "whoIsResponsible": "ENG",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "MET"
+          ],
+          "howOftenValidated": "Every hot-reload event; rollback drill monthly",
+          "opaBundle": "B01",
+          "crosswalks": {
+            "ARISE": "MANAGE",
+            "OWASP": "ASI-02",
+            "CSA_ATF": "E4",
+            "MGF": "Dim2",
+            "NIST_CSF": "PR"
+          }
+        },
+        {
+          "controlId": "OPA-C04",
+          "name": "Policy Decision Logging",
+          "newInV114": false,
+          "whatIsImplemented": "Every OPA decision logged with input context, matched rules, and final verdict for audit trail reconstruction.",
+          "whoIsResponsible": "AUD",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "ATT"
+          ],
+          "howOftenValidated": "Continuous (real-time); decision log completeness audit monthly",
+          "opaBundle": "B01",
+          "crosswalks": {
+            "ARISE": "DETECT",
+            "OWASP": "ASI-02",
+            "CSA_ATF": "E2",
+            "MGF": "Dim2",
+            "NIST_CSF": "DE"
+          }
+        }
+      ]
+    },
+    {
+      "id": "AUT",
+      "name": "Adaptive Autonomy Scale (A0-A4)",
+      "controlCount": 5,
+      "newInV114": 3,
+      "controls": [
+        {
+          "controlId": "AUT-C01",
+          "name": "Autonomy Level Assignment",
+          "newInV114": false,
+          "whatIsImplemented": "Each agent assigned an autonomy level (A0-A4) determining its operational freedom, checkpoint requirements, and deviation thresholds.",
+          "whoIsResponsible": "GOV",
+          "whatEvidenceGenerated": [
+            "APR",
+            "LOG"
+          ],
+          "howOftenValidated": "On assignment/change; level appropriateness review quarterly",
+          "opaBundle": "B07",
+          "crosswalks": {
+            "ARISE": "GOVERN",
+            "OWASP": "ASI-03",
+            "CSA_ATF": "E1,E3",
+            "MGF": "Dim1",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "AUT-C02",
+          "name": "Promotion Gate Evaluation",
+          "newInV114": true,
+          "whatIsImplemented": "5 unified promotion gates (G1 Performance, G2 Security, G3 Business Impact, G4 Clean History, G5 Governance Sign-off) evaluated before any autonomy level increase.",
+          "whoIsResponsible": "GOV",
+          "whatEvidenceGenerated": [
+            "TST",
+            "APR",
+            "MET"
+          ],
+          "howOftenValidated": "Every promotion request; gate criteria review semi-annually",
+          "opaBundle": "B07",
+          "crosswalks": {
+            "ARISE": "VALIDATE",
+            "OWASP": "ASI-03",
+            "CSA_ATF": "E1",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "AUT-C03",
+          "name": "Demotion Trigger Automation",
+          "newInV114": true,
+          "whatIsImplemented": "Automatic autonomy demotion triggered by: security incident, deviation threshold breach, or failed periodic requalification. Immediate scope reduction enforced.",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "ATT"
+          ],
+          "howOftenValidated": "Every demotion event; trigger accuracy review quarterly",
+          "opaBundle": "B07",
+          "crosswalks": {
+            "ARISE": "RESPOND",
+            "OWASP": "ASI-05",
+            "CSA_ATF": "E2,E3",
+            "MGF": "Dim4",
+            "NIST_CSF": "RS"
+          }
+        },
+        {
+          "controlId": "AUT-C04",
+          "name": "Cross-Framework Maturity Mapping",
+          "newInV114": true,
+          "whatIsImplemented": "ARHIA A0-A4 levels mapped to 6 external maturity models (CSA ATF, NVIDIA, KPMG TACO, McKinsey, Singapore MGF) enabling interoperable maturity reporting.",
+          "whoIsResponsible": "GOV",
+          "whatEvidenceGenerated": [
+            "MET"
+          ],
+          "howOftenValidated": "Mapping accuracy review semi-annually; on external framework update",
+          "opaBundle": "B07",
+          "crosswalks": {
+            "ARISE": "GOVERN",
+            "OWASP": "N/A",
+            "CSA_ATF": "E1",
+            "MGF": "Dim1",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "AUT-C05",
+          "name": "Periodic Requalification",
+          "newInV114": false,
+          "whatIsImplemented": "All agents undergo periodic requalification against current baselines and policies. Failure triggers automatic demotion.",
+          "whoIsResponsible": "OPS",
+          "whatEvidenceGenerated": [
+            "TST",
+            "MET"
+          ],
+          "howOftenValidated": "Requalification cycle: A1=90d, A2=60d, A3=30d, A4=14d",
+          "opaBundle": "B07",
+          "crosswalks": {
+            "ARISE": "VALIDATE",
+            "OWASP": "ASI-03",
+            "CSA_ATF": "E1,E3",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        }
+      ]
+    },
+    {
+      "id": "AIM",
+      "name": "Agent Identity Module",
+      "controlCount": 3,
+      "newInV114": 3,
+      "controls": [
+        {
+          "controlId": "AIM-C01",
+          "name": "NHI-Compatible Credential Issuance",
+          "newInV114": true,
+          "whatIsImplemented": "Agent credentials issued via NHI-compatible protocol (OAuth 2.0/SAML adapted) with 10-field schema: agentId, abomRef, supervisorId, departmentScope, autonomyLevel, permissionSet, issuedAt, expiresAt, hmacSignature.",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "ATT",
+            "LOG"
+          ],
+          "howOftenValidated": "Every issuance event; credential hygiene audit monthly",
+          "opaBundle": "B14",
+          "crosswalks": {
+            "ARISE": "IDENTIFY",
+            "OWASP": "ASI-03",
+            "CSA_ATF": "E1",
+            "MGF": "Dim2",
+            "NIST_CSF": "PR"
+          }
+        },
+        {
+          "controlId": "AIM-C02",
+          "name": "4-Layer Composite Identity Chain",
+          "newInV114": true,
+          "whatIsImplemented": "Agent identity resolved through 4-layer chain: Agent → Supervisor → Department → Authorization Boundary. Each layer attenuates permissions downward.",
+          "whoIsResponsible": "SEC",
+          "whatEvidenceGenerated": [
+            "ATT"
+          ],
+          "howOftenValidated": "Every identity resolution; chain integrity audit quarterly",
+          "opaBundle": "B14,B16",
+          "crosswalks": {
+            "ARISE": "IDENTIFY",
+            "OWASP": "ASI-03",
+            "CSA_ATF": "E1,E3",
+            "MGF": "Dim2",
+            "NIST_CSF": "PR"
+          }
+        },
+        {
+          "controlId": "AIM-C03",
+          "name": "Credential Lifecycle Management",
+          "newInV114": true,
+          "whatIsImplemented": "6-phase credential lifecycle: Creation → Rotation → Promotion → Demotion → Suspension → Retirement. Rotation enforced by policy; expired credentials auto-suspended.",
+          "whoIsResponsible": "OPS",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "APR"
+          ],
+          "howOftenValidated": "Every lifecycle event; rotation compliance audit monthly",
+          "opaBundle": "B15",
+          "crosswalks": {
+            "ARISE": "MANAGE",
+            "OWASP": "ASI-03",
+            "CSA_ATF": "E1",
+            "MGF": "Dim2",
+            "NIST_CSF": "PR"
+          }
+        }
+      ]
+    },
+    {
+      "id": "EGA",
+      "name": "Evidence Generation Architecture",
+      "controlCount": 4,
+      "newInV114": 4,
+      "controls": [
+        {
+          "controlId": "EGA-C01",
+          "name": "Evidence Envelope Standard",
+          "newInV114": true,
+          "whatIsImplemented": "All evidence packaged in JSON-LD envelope with mandatory fields: @context, @type, controlId, agentId, timestamp, payload, hmacChain, retentionTier.",
+          "whoIsResponsible": "ENG",
+          "whatEvidenceGenerated": [
+            "LOG"
+          ],
+          "howOftenValidated": "Every evidence emission; schema compliance audit monthly",
+          "opaBundle": "B18",
+          "crosswalks": {
+            "ARISE": "VALIDATE",
+            "OWASP": "ASI-08",
+            "CSA_ATF": "E2",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "EGA-C02",
+          "name": "Evidence Type Classification",
+          "newInV114": true,
+          "whatIsImplemented": "5 evidence types (LOG, ATT, MET, APR, TST) with distinct schema requirements, validation rules, and retention tier defaults.",
+          "whoIsResponsible": "AUD",
+          "whatEvidenceGenerated": [
+            "LOG"
+          ],
+          "howOftenValidated": "Type coverage audit quarterly; on new control addition",
+          "opaBundle": "B18",
+          "crosswalks": {
+            "ARISE": "VALIDATE",
+            "OWASP": "ASI-08",
+            "CSA_ATF": "E2",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "EGA-C03",
+          "name": "Retention Tier Enforcement",
+          "newInV114": true,
+          "whatIsImplemented": "3-tier retention policy (Tier1=7yr, Tier2=3yr, Tier3=1yr) enforced at storage layer. Tier assignment based on control criticality classification.",
+          "whoIsResponsible": "OPS",
+          "whatEvidenceGenerated": [
+            "LOG",
+            "MET"
+          ],
+          "howOftenValidated": "Retention compliance scan monthly; tier assignment review annually",
+          "opaBundle": "B19",
+          "crosswalks": {
+            "ARISE": "MANAGE",
+            "OWASP": "ASI-08",
+            "CSA_ATF": "E5",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        },
+        {
+          "controlId": "EGA-C04",
+          "name": "Evidence Completeness Monitoring",
+          "newInV114": true,
+          "whatIsImplemented": "Continuous monitoring ensuring 100% of controls produce their declared evidence types. Gap detection triggers compliance alert.",
+          "whoIsResponsible": "AUD",
+          "whatEvidenceGenerated": [
+            "MET"
+          ],
+          "howOftenValidated": "Continuous (real-time gap detection); completeness report weekly",
+          "opaBundle": "B18",
+          "crosswalks": {
+            "ARISE": "VALIDATE",
+            "OWASP": "ASI-08",
+            "CSA_ATF": "E2",
+            "MGF": "Dim4",
+            "NIST_CSF": "GV"
+          }
+        }
+      ]
+    }
+  ]
+}

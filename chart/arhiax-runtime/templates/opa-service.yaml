@@ -1,0 +1,26 @@
+{{- if .Values.opa.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "arhiax.opa.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.opa.labels" . | nindent 4 }}
+  {{- with .Values.opa.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.opa.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.opa.service.port }}
+      targetPort: http
+      protocol: TCP
+    - name: diagnostic
+      port: {{ .Values.opa.diagnosticPort }}
+      targetPort: diagnostic
+      protocol: TCP
+  selector:
+    {{- include "arhiax.opa.selectorLabels" . | nindent 4 }}
+{{- end }}

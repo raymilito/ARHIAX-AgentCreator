@@ -1,0 +1,31 @@
+{{- if and .Values.evidenceStore.enabled (eq .Values.evidenceStore.driver "sqlite") .Values.evidenceStore.persistence.enabled (not .Values.evidenceStore.persistence.existingClaim) -}}
+# NOTE: When driver=sqlite and replicaCount=1, this standalone PVC is used
+# instead of StatefulSet volumeClaimTemplates. This keeps the claim name
+# predictable ({{ include "arhiax.evidenceStore.pvcName" . }}) and allows
+# helm upgrade to preserve data across chart version bumps.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "arhiax.evidenceStore.pvcName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.evidenceStore.labels" . | nindent 4 }}
+  {{- with .Values.evidenceStore.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+    helm.sh/resource-policy: keep
+  {{- else }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.evidenceStore.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.evidenceStore.persistence.size | quote }}
+  {{- $sc := include "arhiax.storageClass" (dict "persistence" .Values.evidenceStore.persistence "global" .Values.global) }}
+  {{- if $sc }}
+  storageClassName: {{ $sc | quote }}
+  {{- end }}
+{{- end }}

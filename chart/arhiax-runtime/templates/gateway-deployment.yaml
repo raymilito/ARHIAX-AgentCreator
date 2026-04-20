@@ -1,0 +1,141 @@
+{{- include "arhiax.validateValues" . -}}
+{{- if .Values.gateway.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "arhiax.gateway.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.gateway.labels" . | nindent 4 }}
+  {{- with (include "arhiax.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.gateway.autoscaling.enabled }}
+  replicas: {{ .Values.gateway.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  selector:
+    matchLabels:
+      {{- include "arhiax.gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "arhiax.gateway.labels" . | nindent 8 }}
+      annotations:
+        checksum/opa-config: {{ include (print $.Template.BasePath "/opa-configmap.yaml") . | sha256sum }}
+        {{- if .Values.opa.bundleConfigMap.create }}
+        checksum/opa-bundles: {{ include (print $.Template.BasePath "/opa-bundles-configmap.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.global.commonAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "arhiax.gateway.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.gateway.serviceAccount.automountServiceAccountToken }}
+      {{- include "arhiax.imagePullSecrets" (dict "image" .Values.gateway.image "global" .Values.global) | nindent 6 }}
+      {{- with .Values.gateway.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.gateway.podSecurityContext | nindent 8 }}
+      {{- with .Values.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "arhiax.image" (dict "image" .Values.gateway.image "global" .Values.global) | quote }}
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.gateway.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.containerPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.gateway.metricsPort }}
+              protocol: TCP
+          env:
+            - name: ARHIAX_LOG_LEVEL
+              value: {{ .Values.gateway.config.logLevel | quote }}
+            - name: ARHIAX_LOG_FORMAT
+              value: {{ .Values.gateway.config.logFormat | quote }}
+            - name: ARHIAX_HTTP_PORT
+              value: {{ .Values.gateway.containerPort | quote }}
+            - name: ARHIAX_METRICS_PORT
+              value: {{ .Values.gateway.metricsPort | quote }}
+            - name: ARHIAX_OPA_URL
+              value: {{ include "arhiax.opa.url" . | quote }}
+            - name: ARHIAX_EVIDENCE_STORE_URL
+              value: {{ include "arhiax.evidenceStore.url" . | quote }}
+            - name: ARHIAX_JWT_AUDIENCES
+              value: {{ join "," .Values.gateway.config.jwtAudiences | quote }}
+            - name: ARHIAX_MAX_REQUEST_BODY_BYTES
+              value: {{ .Values.gateway.config.maxRequestBodyBytes | quote }}
+            - name: ARHIAX_RATE_LIMIT_RPS
+              value: {{ .Values.gateway.config.rateLimitRps | quote }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- with .Values.gateway.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.gateway.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.gateway.livenessProbe.enabled }}
+          livenessProbe:
+            {{- omit .Values.gateway.livenessProbe "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          {{- if .Values.gateway.readinessProbe.enabled }}
+          readinessProbe:
+            {{- omit .Values.gateway.readinessProbe "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          {{- if .Values.gateway.startupProbe.enabled }}
+          startupProbe:
+            {{- omit .Values.gateway.startupProbe "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /var/cache/arhiax
+            {{- with .Values.gateway.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+        {{- with .Values.gateway.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

@@ -1,0 +1,201 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "arhiax-runtime.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "arhiax-runtime.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "arhiax-runtime.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "arhiax-runtime.labels" . | nindent 8 }}
+      annotations:
+        {{- if .Values.bundles.annotateChecksum }}
+        # Force a rollout when any bundle .rego file changes. Without this,
+        # editing the ConfigMap would leave running pods with stale policies.
+        # OPA-C02 (policy version tracking) depends on this behaviour.
+        arhiax.bundles/checksum: {{ include (print $.Template.BasePath "/configmap-bundles.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.commonAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "arhiax-runtime.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      # =======================================================================
+      # Containers
+      # =======================================================================
+      containers:
+
+        # ---------------------------------------------------------------------
+        # 1. ATK reference service (main container)
+        # ---------------------------------------------------------------------
+        - name: atk
+          image: {{ include "arhiax-runtime.atkImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.atk.port }}
+              protocol: TCP
+          env:
+            {{- range $key, $value := .Values.atk.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            - name: ARHIAX_ATK_PORT
+              value: {{ .Values.atk.port | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            {{- range .Values.atk.envFromSecrets }}
+            - name: {{ .envVar }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .key }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.atk.resources | nindent 12 }}
+          startupProbe:
+            {{- toYaml .Values.atk.startupProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.atk.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.atk.readinessProbe | nindent 12 }}
+          volumeMounts:
+            # /tmp is the only writable mount point the ATK process needs
+            # (temporary files for evidence buffering before EGA flush).
+            # readOnlyRootFilesystem=true requires this explicit emptyDir.
+            - name: tmp
+              mountPath: /tmp
+
+        # ---------------------------------------------------------------------
+        # 2. OPA sidecar
+        # ---------------------------------------------------------------------
+        {{- if .Values.opa.enabled }}
+        - name: opa
+          image: {{ include "arhiax-runtime.opaImage" . }}
+          imagePullPolicy: {{ .Values.opa.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: opa
+              containerPort: {{ .Values.opa.port }}
+              protocol: TCP
+          args:
+            - "run"
+            - "--server"
+            - "--addr=127.0.0.1:{{ .Values.opa.port }}"
+            - "--log-level={{ .Values.opa.logLevel }}"
+            - "--log-format=json"
+            - "--set=decision_logs.console=false"
+            {{- if .Values.opa.decisionLogs.enabled }}
+            - "--set=decision_logs.service=ega_sink"
+            - "--set=services.ega_sink.url={{ .Values.opa.decisionLogs.service.url }}"
+            {{- if .Values.opa.decisionLogs.service.credentials.bearer.tokenSecret }}
+            - "--set=services.ega_sink.credentials.bearer.token_path=/etc/opa/credentials/token"
+            {{- end }}
+            {{- end }}
+            {{- with .Values.opa.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.bundles.useConfigMap }}
+            # Load all .rego files from the ConfigMap mount as a single bundle
+            - "/policies"
+            {{- end }}
+          resources:
+            {{- toYaml .Values.opa.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.opa.port }}
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health?bundle=true
+              port: {{ .Values.opa.port }}
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            {{- if .Values.bundles.useConfigMap }}
+            - name: opa-bundles
+              mountPath: /policies
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.opa.decisionLogs.enabled .Values.opa.decisionLogs.service.credentials.bearer.tokenSecret }}
+            - name: opa-credentials
+              mountPath: /etc/opa/credentials
+              readOnly: true
+            {{- end }}
+        {{- end }}
+
+      # =======================================================================
+      # Volumes
+      # =======================================================================
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        {{- if and .Values.opa.enabled .Values.bundles.useConfigMap }}
+        - name: opa-bundles
+          configMap:
+            name: {{ include "arhiax-runtime.bundlesConfigMapName" . }}
+        {{- end }}
+        {{- if and .Values.opa.enabled .Values.opa.decisionLogs.enabled .Values.opa.decisionLogs.service.credentials.bearer.tokenSecret }}
+        - name: opa-credentials
+          secret:
+            secretName: {{ .Values.opa.decisionLogs.service.credentials.bearer.tokenSecret }}
+            items:
+              - key: {{ .Values.opa.decisionLogs.service.credentials.bearer.tokenKey }}
+                path: token
+        {{- end }}

@@ -1,0 +1,100 @@
+# ── Entorno y secretos ────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+secrets/
+
+# ── Certificados TLS ──────────────────────────────────────────────────────────
+# Las claves privadas NUNCA van a git.
+# El CA público (ca.crt) puede comitearse si el equipo lo necesita para desarrollo.
+certs/*.key
+certs/*.csr
+certs/*.ext
+certs/*.srl
+# Descomenta la siguiente línea si NO quieres commitear ningún certificado:
+# certs/*.crt
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# ── Tests y cobertura ─────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+.tox/
+nosetests.xml
+test-results/
+junit*.xml
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Datos persistentes (volúmenes locales) ────────────────────────────────────
+data/
+volumes/
+*.db
+*.jsonl
+!sdk/python/examples/*.jsonl
+
+# ── IDEs y editores ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Distribución del SDK ──────────────────────────────────────────────────────
+sdk/python/dist/
+sdk/python/build/
+sdk/python/*.egg-info/
+
+# ── Helm ─────────────────────────────────────────────────────────────────────
+chart/*/charts/
+chart/*/*.lock
+
+# ── Archivos temporales ───────────────────────────────────────────────────────
+*.tmp
+*.bak
+*.orig

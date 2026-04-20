@@ -1,0 +1,886 @@
+metadata:
+  title: ARHIA v11.4 Master Crosswalk Matrix
+  documentId: TR-2026-032-CW
+  version: '11.4'
+  generatedDate: '2026-04-04'
+  author: Sinergia Consulting Group S.A.S.
+  sourceRegistry: TR-2026-031-CR
+  totalControls: 36
+  frameworksCrosswalkd: 5
+  additionalOverlay: NIST CSF 2.0
+frameworks:
+  ARISE:
+    fullName: ARISE Framework (Assessed Intelligence)
+    version: 1.0 (March 2026)
+    elements:
+      GOVERN:
+        name: Govern
+        description: Organizational governance structures, policies, roles, and accountability for AI systems
+      MANAGE:
+        name: Manage
+        description: Ongoing management of AI systems including lifecycle, change control, and resource allocation
+      IDENTIFY:
+        name: Identify
+        description: Asset identification, risk assessment, and environmental context for AI systems
+      PROTECT:
+        name: Protect
+        description: Technical and organizational safeguards to ensure AI system integrity and security
+      DETECT:
+        name: Detect
+        description: Monitoring, anomaly detection, and continuous assessment of AI system behavior
+      RESPOND:
+        name: Respond
+        description: Incident response, escalation, and remediation procedures for AI system events
+      VALIDATE:
+        name: Validate
+        description: Pre-production validation, testing, and executive approval gates
+  OWASP:
+    fullName: OWASP Top 10 for Agentic Applications 2026
+    version: 1.0 (December 2025)
+    elements:
+      ASI-01:
+        name: Prompt Injection
+        description: Direct and indirect prompt injection attacks manipulating agent behavior
+      ASI-02:
+        name: Broken Access Control
+        description: Inadequate enforcement of agent permissions and authorization boundaries
+      ASI-03:
+        name: Broken Trust Boundaries
+        description: Failure to enforce trust boundaries between agents and between agents and external systems
+      ASI-04:
+        name: Insufficient Monitoring
+        description: Lack of adequate logging, monitoring, and anomaly detection for agent actions
+      ASI-05:
+        name: Insecure Autonomy
+        description: Agents operating with excessive autonomy without appropriate human oversight
+      ASI-06:
+        name: RAG Poisoning
+        description: Manipulation of retrieval-augmented generation data sources to influence agent outputs
+      ASI-07:
+        name: Unsafe Output Handling
+        description: Inadequate validation and sanitization of agent-generated outputs
+      ASI-08:
+        name: Insufficient Audit Trail
+        description: Failure to maintain tamper-proof records of agent decisions and actions
+      ASI-09:
+        name: Overreliance on Agents
+        description: Excessive trust in agent outputs without appropriate human verification
+      ASI-10:
+        name: Supply Chain Vulnerabilities
+        description: Risks from third-party models, tools, and dependencies in the agent supply chain
+  CSA_ATF:
+    fullName: CSA Agentic Trust Framework
+    version: 1.0 (February 2026)
+    elements:
+      E1:
+        name: Identity & Authentication
+        description: Agent identity management, credential issuance, and authentication mechanisms
+      E2:
+        name: Behavioral Monitoring
+        description: Continuous observation and analysis of agent behavioral patterns
+      E3:
+        name: Segmentation & Boundaries
+        description: Isolation, scope limitation, and trust boundary enforcement for agents
+      E4:
+        name: I/O Governance
+        description: Input validation, output sanitization, and data flow control
+      E5:
+        name: Incident Response
+        description: Detection, containment, and recovery procedures for agent-related incidents
+  MGF:
+    fullName: Singapore Model Governance Framework for Agentic AI
+    version: 1.0 (January 2026, IMDA)
+    elements:
+      Dim1:
+        name: Accountability & Governance
+        description: Organizational accountability structures and governance mechanisms for agentic AI
+      Dim2:
+        name: Security & Trust
+        description: Security controls, trust mechanisms, and identity management for AI agents
+      Dim3:
+        name: Safety & Monitoring
+        description: Operational safety, continuous monitoring, and anomaly detection
+      Dim4:
+        name: Human Oversight
+        description: Human-in-the-loop controls, escalation mechanisms, and override capabilities
+  NIST_CSF:
+    fullName: NIST Cybersecurity Framework 2.0 + AI RMF
+    version: CSF 2.0 (2024) + AI RMF 1.0 + CAISI (2026)
+    elements:
+      GV:
+        name: Govern
+        description: Cybersecurity risk management strategy, expectations, and policy
+      ID:
+        name: Identify
+        description: Understanding organizational context, assets, and risk
+      PR:
+        name: Protect
+        description: Safeguards to manage cybersecurity risks
+      DE:
+        name: Detect
+        description: Finding and analyzing cybersecurity events
+      RS:
+        name: Respond
+        description: Actions regarding detected cybersecurity incidents
+      RC:
+        name: Recover
+        description: Restoring capabilities after cybersecurity incidents
+coverageSummary:
+  ARISE:
+    framework: ARISE Framework (Assessed Intelligence)
+    version: 1.0 (March 2026)
+    totalElements: 7
+    fullCoverage: 7
+    partialCoverage: 0
+    gaps: 0
+    coveragePercent: 100.0
+    elements:
+      GOVERN:
+        name: Govern
+        description: Organizational governance structures, policies, roles, and accountability for AI systems
+        arhiaControls:
+        - HIC-C01
+        - HIC-C03
+        - AUT-C01
+        - AUT-C04
+        controlCount: 4
+        coverageStatus: FULL
+      MANAGE:
+        name: Manage
+        description: Ongoing management of AI systems including lifecycle, change control, and resource allocation
+        arhiaControls:
+        - ABO-C03
+        - HIC-C04
+        - HIC-C05
+        - OPA-C02
+        - OPA-C03
+        - AIM-C03
+        - EGA-C03
+        controlCount: 7
+        coverageStatus: FULL
+      IDENTIFY:
+        name: Identify
+        description: Asset identification, risk assessment, and environmental context for AI systems
+        arhiaControls:
+        - DTG-C04
+        - ABO-C01
+        - AIM-C01
+        - AIM-C02
+        controlCount: 4
+        coverageStatus: FULL
+      PROTECT:
+        name: Protect
+        description: Technical and organizational safeguards to ensure AI system integrity and security
+        arhiaControls:
+        - ATK-C01
+        - ATK-C02
+        - ATK-C03
+        - ATK-C04
+        - ATK-C07
+        - ABO-C02
+        - OPA-C01
+        controlCount: 7
+        coverageStatus: FULL
+      DETECT:
+        name: Detect
+        description: Monitoring, anomaly detection, and continuous assessment of AI system behavior
+        arhiaControls:
+        - ATK-C06
+        - DTG-C01
+        - DTG-C02
+        - DTG-C03
+        - OPA-C04
+        controlCount: 5
+        coverageStatus: FULL
+      RESPOND:
+        name: Respond
+        description: Incident response, escalation, and remediation procedures for AI system events
+        arhiaControls:
+        - ATK-C05
+        - DTG-C05
+        - HIC-C02
+        - AUT-C03
+        controlCount: 4
+        coverageStatus: FULL
+      VALIDATE:
+        name: Validate
+        description: Pre-production validation, testing, and executive approval gates
+        arhiaControls:
+        - AUT-C02
+        - AUT-C05
+        - EGA-C01
+        - EGA-C02
+        - EGA-C04
+        controlCount: 5
+        coverageStatus: FULL
+  OWASP:
+    framework: OWASP Top 10 for Agentic Applications 2026
+    version: 1.0 (December 2025)
+    totalElements: 10
+    fullCoverage: 8
+    partialCoverage: 2
+    gaps: 0
+    coveragePercent: 90.0
+    elements:
+      ASI-01:
+        name: Prompt Injection
+        description: Direct and indirect prompt injection attacks manipulating agent behavior
+        arhiaControls:
+        - ATK-C03
+        - DTG-C05
+        controlCount: 2
+        coverageStatus: FULL
+      ASI-02:
+        name: Broken Access Control
+        description: Inadequate enforcement of agent permissions and authorization boundaries
+        arhiaControls:
+        - OPA-C01
+        - OPA-C02
+        - OPA-C03
+        - OPA-C04
+        controlCount: 4
+        coverageStatus: FULL
+      ASI-03:
+        name: Broken Trust Boundaries
+        description: Failure to enforce trust boundaries between agents and between agents and external systems
+        arhiaControls:
+        - ATK-C01
+        - ATK-C02
+        - ATK-C07
+        - AUT-C01
+        - AUT-C02
+        - AUT-C05
+        - AIM-C01
+        - AIM-C02
+        - AIM-C03
+        controlCount: 9
+        coverageStatus: FULL
+      ASI-04:
+        name: Insufficient Monitoring
+        description: Lack of adequate logging, monitoring, and anomaly detection for agent actions
+        arhiaControls:
+        - DTG-C01
+        - DTG-C02
+        - DTG-C03
+        - DTG-C04
+        controlCount: 4
+        coverageStatus: FULL
+      ASI-05:
+        name: Insecure Autonomy
+        description: Agents operating with excessive autonomy without appropriate human oversight
+        arhiaControls:
+        - ATK-C05
+        - AUT-C03
+        controlCount: 2
+        coverageStatus: FULL
+      ASI-06:
+        name: RAG Poisoning
+        description: Manipulation of retrieval-augmented generation data sources to influence agent outputs
+        arhiaControls: []
+        controlCount: 0
+        coverageStatus: PARTIAL
+      ASI-07:
+        name: Unsafe Output Handling
+        description: Inadequate validation and sanitization of agent-generated outputs
+        arhiaControls:
+        - ATK-C04
+        controlCount: 1
+        coverageStatus: FULL
+      ASI-08:
+        name: Insufficient Audit Trail
+        description: Failure to maintain tamper-proof records of agent decisions and actions
+        arhiaControls:
+        - ATK-C06
+        - DTG-C03
+        - EGA-C01
+        - EGA-C02
+        - EGA-C03
+        - EGA-C04
+        controlCount: 6
+        coverageStatus: FULL
+      ASI-09:
+        name: Overreliance on Agents
+        description: Excessive trust in agent outputs without appropriate human verification
+        arhiaControls:
+        - HIC-C01
+        - HIC-C02
+        - HIC-C03
+        - HIC-C04
+        - HIC-C05
+        controlCount: 5
+        coverageStatus: PARTIAL
+      ASI-10:
+        name: Supply Chain Vulnerabilities
+        description: Risks from third-party models, tools, and dependencies in the agent supply chain
+        arhiaControls:
+        - DTG-C05
+        - ABO-C01
+        - ABO-C02
+        - ABO-C03
+        controlCount: 4
+        coverageStatus: FULL
+  CSA_ATF:
+    framework: CSA Agentic Trust Framework
+    version: 1.0 (February 2026)
+    totalElements: 5
+    fullCoverage: 5
+    partialCoverage: 0
+    gaps: 0
+    coveragePercent: 100.0
+    elements:
+      E1:
+        name: Identity & Authentication
+        description: Agent identity management, credential issuance, and authentication mechanisms
+        arhiaControls:
+        - ATK-C01
+        - ATK-C07
+        - ABO-C01
+        - ABO-C02
+        - ABO-C03
+        - AUT-C01
+        - AUT-C02
+        - AUT-C04
+        - AUT-C05
+        - AIM-C01
+        - AIM-C02
+        - AIM-C03
+        controlCount: 12
+        coverageStatus: FULL
+      E2:
+        name: Behavioral Monitoring
+        description: Continuous observation and analysis of agent behavioral patterns
+        arhiaControls:
+        - ATK-C06
+        - DTG-C01
+        - DTG-C02
+        - DTG-C03
+        - DTG-C04
+        - HIC-C05
+        - OPA-C02
+        - OPA-C04
+        - AUT-C03
+        - EGA-C01
+        - EGA-C02
+        - EGA-C04
+        controlCount: 12
+        coverageStatus: FULL
+      E3:
+        name: Segmentation & Boundaries
+        description: Isolation, scope limitation, and trust boundary enforcement for agents
+        arhiaControls:
+        - ATK-C02
+        - ATK-C07
+        - HIC-C01
+        - HIC-C02
+        - AUT-C01
+        - AUT-C03
+        - AUT-C05
+        - AIM-C02
+        controlCount: 8
+        coverageStatus: FULL
+      E4:
+        name: I/O Governance
+        description: Input validation, output sanitization, and data flow control
+        arhiaControls:
+        - ATK-C03
+        - ATK-C04
+        - OPA-C01
+        - OPA-C03
+        controlCount: 4
+        coverageStatus: FULL
+      E5:
+        name: Incident Response
+        description: Detection, containment, and recovery procedures for agent-related incidents
+        arhiaControls:
+        - ATK-C05
+        - DTG-C05
+        - HIC-C03
+        - HIC-C04
+        - EGA-C03
+        controlCount: 5
+        coverageStatus: FULL
+  MGF:
+    framework: Singapore Model Governance Framework for Agentic AI
+    version: 1.0 (January 2026, IMDA)
+    totalElements: 4
+    fullCoverage: 4
+    partialCoverage: 0
+    gaps: 0
+    coveragePercent: 100.0
+    elements:
+      Dim1:
+        name: Accountability & Governance
+        description: Organizational accountability structures and governance mechanisms for agentic AI
+        arhiaControls:
+        - ABO-C01
+        - ABO-C02
+        - ABO-C03
+        - AUT-C01
+        - AUT-C04
+        controlCount: 5
+        coverageStatus: FULL
+      Dim2:
+        name: Security & Trust
+        description: Security controls, trust mechanisms, and identity management for AI agents
+        arhiaControls:
+        - ATK-C01
+        - ATK-C02
+        - ATK-C06
+        - ATK-C07
+        - OPA-C01
+        - OPA-C02
+        - OPA-C03
+        - OPA-C04
+        - AIM-C01
+        - AIM-C02
+        - AIM-C03
+        controlCount: 11
+        coverageStatus: FULL
+      Dim3:
+        name: Safety & Monitoring
+        description: Operational safety, continuous monitoring, and anomaly detection
+        arhiaControls:
+        - ATK-C03
+        - ATK-C04
+        - DTG-C01
+        - DTG-C02
+        - DTG-C03
+        - DTG-C04
+        controlCount: 6
+        coverageStatus: FULL
+      Dim4:
+        name: Human Oversight
+        description: Human-in-the-loop controls, escalation mechanisms, and override capabilities
+        arhiaControls:
+        - ATK-C05
+        - DTG-C05
+        - HIC-C01
+        - HIC-C02
+        - HIC-C03
+        - HIC-C04
+        - HIC-C05
+        - AUT-C02
+        - AUT-C03
+        - AUT-C05
+        - EGA-C01
+        - EGA-C02
+        - EGA-C03
+        - EGA-C04
+        controlCount: 14
+        coverageStatus: FULL
+  NIST_CSF:
+    framework: NIST Cybersecurity Framework 2.0 + AI RMF
+    version: CSF 2.0 (2024) + AI RMF 1.0 + CAISI (2026)
+    totalElements: 6
+    fullCoverage: 5
+    partialCoverage: 1
+    gaps: 0
+    coveragePercent: 91.7
+    elements:
+      GV:
+        name: Govern
+        description: Cybersecurity risk management strategy, expectations, and policy
+        arhiaControls:
+        - ABO-C03
+        - HIC-C01
+        - HIC-C03
+        - HIC-C04
+        - HIC-C05
+        - OPA-C02
+        - AUT-C01
+        - AUT-C02
+        - AUT-C04
+        - AUT-C05
+        - EGA-C01
+        - EGA-C02
+        - EGA-C03
+        - EGA-C04
+        controlCount: 14
+        coverageStatus: FULL
+      ID:
+        name: Identify
+        description: Understanding organizational context, assets, and risk
+        arhiaControls:
+        - DTG-C04
+        - ABO-C01
+        controlCount: 2
+        coverageStatus: FULL
+      PR:
+        name: Protect
+        description: Safeguards to manage cybersecurity risks
+        arhiaControls:
+        - ATK-C01
+        - ATK-C02
+        - ATK-C03
+        - ATK-C04
+        - ATK-C07
+        - ABO-C02
+        - OPA-C01
+        - OPA-C03
+        - AIM-C01
+        - AIM-C02
+        - AIM-C03
+        controlCount: 11
+        coverageStatus: FULL
+      DE:
+        name: Detect
+        description: Finding and analyzing cybersecurity events
+        arhiaControls:
+        - ATK-C06
+        - DTG-C01
+        - DTG-C02
+        - DTG-C03
+        - OPA-C04
+        controlCount: 5
+        coverageStatus: FULL
+      RS:
+        name: Respond
+        description: Actions regarding detected cybersecurity incidents
+        arhiaControls:
+        - ATK-C05
+        - DTG-C05
+        - HIC-C02
+        - AUT-C03
+        controlCount: 4
+        coverageStatus: FULL
+      RC:
+        name: Recover
+        description: Restoring capabilities after cybersecurity incidents
+        arhiaControls:
+        - DTG-C05
+        - AUT-C03
+        controlCount: 2
+        coverageStatus: PARTIAL
+        coverageNote: Agent-level recovery via playbook dispatch and demotion. Organizational BCP/DR outside ARHIA scope.
+partialCoverageNotes:
+  OWASP-ASI-06: 'RAG Poisoning: ARHIA covers data access monitoring and input validation but user behavioral trust patterns
+    (social engineering via RAG) require organizational controls beyond runtime enforcement.'
+  OWASP-ASI-09: 'Overreliance: ARHIA provides HITL checkpoints and escalation routing but human trust calibration patterns
+    are behavioral/organizational, partially beyond runtime scope.'
+  NIST_CSF-RC: 'Recover: ARHIA provides agent-level recovery through playbook dispatch and demotion triggers but organizational
+    business continuity planning (BCP/DR) is outside runtime scope.'
+controlCrosswalkMatrix:
+- controlId: ATK-C01
+  subsystem: ATK
+  controlName: 5-Check Envelope Validation
+  crosswalks:
+    ARISE: PROTECT
+    OWASP: ASI-03
+    CSA_ATF: E1
+    MGF: Dim2
+    NIST_CSF: PR
+- controlId: ATK-C02
+  subsystem: ATK
+  controlName: Agent Scope Boundary Enforcement
+  crosswalks:
+    ARISE: PROTECT
+    OWASP: ASI-03
+    CSA_ATF: E3
+    MGF: Dim2
+    NIST_CSF: PR
+- controlId: ATK-C03
+  subsystem: ATK
+  controlName: Input Sanitization Gate
+  crosswalks:
+    ARISE: PROTECT
+    OWASP: ASI-01
+    CSA_ATF: E4
+    MGF: Dim3
+    NIST_CSF: PR
+- controlId: ATK-C04
+  subsystem: ATK
+  controlName: Output Validation Gate
+  crosswalks:
+    ARISE: PROTECT
+    OWASP: ASI-07
+    CSA_ATF: E4
+    MGF: Dim3
+    NIST_CSF: PR
+- controlId: ATK-C05
+  subsystem: ATK
+  controlName: 6-Outcome Decision Routing
+  crosswalks:
+    ARISE: RESPOND
+    OWASP: ASI-05
+    CSA_ATF: E5
+    MGF: Dim4
+    NIST_CSF: RS
+- controlId: ATK-C06
+  subsystem: ATK
+  controlName: HMAC Chain Integrity
+  crosswalks:
+    ARISE: DETECT
+    OWASP: ASI-08
+    CSA_ATF: E2
+    MGF: Dim2
+    NIST_CSF: DE
+- controlId: ATK-C07
+  subsystem: ATK
+  controlName: Cross-Domain Trust Propagation
+  crosswalks:
+    ARISE: PROTECT
+    OWASP: ASI-03
+    CSA_ATF: E1,E3
+    MGF: Dim2
+    NIST_CSF: PR
+- controlId: DTG-C01
+  subsystem: DTG
+  controlName: Trajectory Logging
+  crosswalks:
+    ARISE: DETECT
+    OWASP: ASI-04
+    CSA_ATF: E2
+    MGF: Dim3
+    NIST_CSF: DE
+- controlId: DTG-C02
+  subsystem: DTG
+  controlName: Anomaly Detection
+  crosswalks:
+    ARISE: DETECT
+    OWASP: ASI-04
+    CSA_ATF: E2
+    MGF: Dim3
+    NIST_CSF: DE
+- controlId: DTG-C03
+  subsystem: DTG
+  controlName: Cross-Layer Anomaly Correlation (CLAS)
+  crosswalks:
+    ARISE: DETECT
+    OWASP: ASI-04,ASI-08
+    CSA_ATF: E2
+    MGF: Dim3
+    NIST_CSF: DE
+- controlId: DTG-C04
+  subsystem: DTG
+  controlName: Behavioral Baseline Registry (BBR)
+  crosswalks:
+    ARISE: IDENTIFY
+    OWASP: ASI-04
+    CSA_ATF: E2
+    MGF: Dim3
+    NIST_CSF: ID
+- controlId: DTG-C05
+  subsystem: DTG
+  controlName: Playbook Dispatch Engine
+  crosswalks:
+    ARISE: RESPOND
+    OWASP: ASI-01 to ASI-10
+    CSA_ATF: E5
+    MGF: Dim4
+    NIST_CSF: RS
+- controlId: ABO-C01
+  subsystem: ABO
+  controlName: Component Inventory
+  crosswalks:
+    ARISE: IDENTIFY
+    OWASP: ASI-10
+    CSA_ATF: E1
+    MGF: Dim1
+    NIST_CSF: ID
+- controlId: ABO-C02
+  subsystem: ABO
+  controlName: Supply Chain Verification
+  crosswalks:
+    ARISE: PROTECT
+    OWASP: ASI-10
+    CSA_ATF: E1
+    MGF: Dim1
+    NIST_CSF: PR
+- controlId: ABO-C03
+  subsystem: ABO
+  controlName: Lifecycle State Management
+  crosswalks:
+    ARISE: MANAGE
+    OWASP: ASI-10
+    CSA_ATF: E1
+    MGF: Dim1
+    NIST_CSF: GV
+- controlId: HIC-C01
+  subsystem: HIC
+  controlName: Pre-Execution Approval Gate
+  crosswalks:
+    ARISE: GOVERN
+    OWASP: ASI-09
+    CSA_ATF: E3
+    MGF: Dim4
+    NIST_CSF: GV
+- controlId: HIC-C02
+  subsystem: HIC
+  controlName: Escalation Routing
+  crosswalks:
+    ARISE: RESPOND
+    OWASP: ASI-09
+    CSA_ATF: E3
+    MGF: Dim4
+    NIST_CSF: RS
+- controlId: HIC-C03
+  subsystem: HIC
+  controlName: Override Documentation
+  crosswalks:
+    ARISE: GOVERN
+    OWASP: ASI-09
+    CSA_ATF: E5
+    MGF: Dim4
+    NIST_CSF: GV
+- controlId: HIC-C04
+  subsystem: HIC
+  controlName: Checkpoint SLA Monitoring
+  crosswalks:
+    ARISE: MANAGE
+    OWASP: ASI-09
+    CSA_ATF: E5
+    MGF: Dim4
+    NIST_CSF: GV
+- controlId: HIC-C05
+  subsystem: HIC
+  controlName: Feedback Loop Integration
+  crosswalks:
+    ARISE: MANAGE
+    OWASP: ASI-09
+    CSA_ATF: E2
+    MGF: Dim4
+    NIST_CSF: GV
+- controlId: OPA-C01
+  subsystem: OPA
+  controlName: Policy Evaluation Gate
+  crosswalks:
+    ARISE: PROTECT
+    OWASP: ASI-02
+    CSA_ATF: E4
+    MGF: Dim2
+    NIST_CSF: PR
+- controlId: OPA-C02
+  subsystem: OPA
+  controlName: Policy Version Control
+  crosswalks:
+    ARISE: MANAGE
+    OWASP: ASI-02
+    CSA_ATF: E2
+    MGF: Dim2
+    NIST_CSF: GV
+- controlId: OPA-C03
+  subsystem: OPA
+  controlName: Policy Hot-Reload with Rollback
+  crosswalks:
+    ARISE: MANAGE
+    OWASP: ASI-02
+    CSA_ATF: E4
+    MGF: Dim2
+    NIST_CSF: PR
+- controlId: OPA-C04
+  subsystem: OPA
+  controlName: Policy Decision Logging
+  crosswalks:
+    ARISE: DETECT
+    OWASP: ASI-02
+    CSA_ATF: E2
+    MGF: Dim2
+    NIST_CSF: DE
+- controlId: AUT-C01
+  subsystem: AUT
+  controlName: Autonomy Level Assignment
+  crosswalks:
+    ARISE: GOVERN
+    OWASP: ASI-03
+    CSA_ATF: E1,E3
+    MGF: Dim1
+    NIST_CSF: GV
+- controlId: AUT-C02
+  subsystem: AUT
+  controlName: Promotion Gate Evaluation
+  crosswalks:
+    ARISE: VALIDATE
+    OWASP: ASI-03
+    CSA_ATF: E1
+    MGF: Dim4
+    NIST_CSF: GV
+- controlId: AUT-C03
+  subsystem: AUT
+  controlName: Demotion Trigger Automation
+  crosswalks:
+    ARISE: RESPOND
+    OWASP: ASI-05
+    CSA_ATF: E2,E3
+    MGF: Dim4
+    NIST_CSF: RS
+- controlId: AUT-C04
+  subsystem: AUT
+  controlName: Cross-Framework Maturity Mapping
+  crosswalks:
+    ARISE: GOVERN
+    OWASP: N/A
+    CSA_ATF: E1
+    MGF: Dim1
+    NIST_CSF: GV
+- controlId: AUT-C05
+  subsystem: AUT
+  controlName: Periodic Requalification
+  crosswalks:
+    ARISE: VALIDATE
+    OWASP: ASI-03
+    CSA_ATF: E1,E3
+    MGF: Dim4
+    NIST_CSF: GV
+- controlId: AIM-C01
+  subsystem: AIM
+  controlName: NHI-Compatible Credential Issuance
+  crosswalks:
+    ARISE: IDENTIFY
+    OWASP: ASI-03
+    CSA_ATF: E1
+    MGF: Dim2
+    NIST_CSF: PR
+- controlId: AIM-C02
+  subsystem: AIM
+  controlName: 4-Layer Composite Identity Chain
+  crosswalks:
+    ARISE: IDENTIFY
+    OWASP: ASI-03
+    CSA_ATF: E1,E3
+    MGF: Dim2
+    NIST_CSF: PR
+- controlId: AIM-C03
+  subsystem: AIM
+  controlName: Credential Lifecycle Management
+  crosswalks:
+    ARISE: MANAGE
+    OWASP: ASI-03
+    CSA_ATF: E1
+    MGF: Dim2
+    NIST_CSF: PR
+- controlId: EGA-C01
+  subsystem: EGA
+  controlName: Evidence Envelope Standard
+  crosswalks:
+    ARISE: VALIDATE
+    OWASP: ASI-08
+    CSA_ATF: E2
+    MGF: Dim4
+    NIST_CSF: GV
+- controlId: EGA-C02
+  subsystem: EGA
+  controlName: Evidence Type Classification
+  crosswalks:
+    ARISE: VALIDATE
+    OWASP: ASI-08
+    CSA_ATF: E2
+    MGF: Dim4
+    NIST_CSF: GV
+- controlId: EGA-C03
+  subsystem: EGA
+  controlName: Retention Tier Enforcement
+  crosswalks:
+    ARISE: MANAGE
+    OWASP: ASI-08
+    CSA_ATF: E5
+    MGF: Dim4
+    NIST_CSF: GV
+- controlId: EGA-C04
+  subsystem: EGA
+  controlName: Evidence Completeness Monitoring
+  crosswalks:
+    ARISE: VALIDATE
+    OWASP: ASI-08
+    CSA_ATF: E2
+    MGF: Dim4
+    NIST_CSF: GV

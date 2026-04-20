@@ -1,0 +1,236 @@
+name: Build and publish ARHIAX runtime images
+
+# This workflow builds the three ARHIAX runtime container images
+# (gateway, evidence-store, correlator) and publishes them to GitHub
+# Container Registry with keyless cosign signatures.
+#
+# Triggers:
+#   - Push of a version tag (v1.0.0, v1.1.0, ...) → builds + pushes + signs.
+#   - Pull request → builds only, no push, no sign. This catches
+#     Dockerfile regressions before merge without polluting the registry.
+#   - Manual dispatch → same as a tag, lets maintainers cut a release
+#     from any commit without having to push a tag first.
+#
+# Why a single workflow with a matrix instead of three separate ones:
+#   The three images share identical CI plumbing (checkout, login, build,
+#   push, sign, attest). A matrix keeps that plumbing in one place so
+#   updates to (e.g.) the cosign action version happen once. When v1.1
+#   adds a fourth image, it's a one-line addition to the matrix.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    paths:
+      - 'gateway/**'
+      - 'evidence-store/**'
+      - 'correlator/**'
+      - '.github/workflows/build-images.yaml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to apply (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+# Concurrency: cancel in-progress runs on the same ref to save CI
+# minutes. A new push to a PR supersedes the previous build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Permissions: 'id-token: write' is REQUIRED for cosign keyless OIDC.
+# 'packages: write' is required to push to ghcr.io. 'contents: read'
+# is the default and lets actions/checkout read the repo. Keep these
+# at the workflow level (not job level) so a future second job inherits.
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+env:
+  REGISTRY: ghcr.io
+  # Image base path. The matrix appends each image name to this.
+  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.image }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      # fail-fast: false → if one image build fails, the others still run.
+      # Without this, a flake in (e.g.) the correlator build would mask
+      # whether the gateway build is healthy.
+      fail-fast: false
+      matrix:
+        include:
+          - image: arhiax-gateway
+            context: gateway
+            dockerfile: gateway/Dockerfile
+          - image: arhiax-evidence-store
+            context: evidence-store
+            dockerfile: evidence-store/Dockerfile
+          - image: arhiax-correlator
+            context: correlator
+            dockerfile: correlator/Dockerfile
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history needed for git describe in build args. We use
+          # depth: 0 instead of fetch-tags so any commit can be released.
+          fetch-depth: 0
+
+      # ----------------------------------------------------------------
+      # Compute version, commit, build date.
+      #
+      # On a tag push: VERSION = tag minus the leading 'v'.
+      # On manual dispatch: VERSION = the input value.
+      # On a PR: VERSION = pr-<number>-<short-sha>, never published.
+      # ----------------------------------------------------------------
+      - name: Compute version metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="pr-${{ github.event.pull_request.number }}-$(git rev-parse --short HEAD)"
+          fi
+          COMMIT="$(git rev-parse HEAD)"
+          BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
+          echo "Computed: version=${VERSION} commit=${COMMIT} build_date=${BUILD_DATE}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login is skipped on PRs because (a) we don't push, and (b) PRs
+      # from forks don't have access to the workflow's GITHUB_TOKEN with
+      # write permissions anyway.
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Compute image tags. We always tag with the version, and on a
+      # tag push we ALSO add the 'latest' tag. PR builds get a single
+      # tag and are not pushed.
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          IMG="${{ env.IMAGE_BASE }}/${{ matrix.image }}"
+          TAGS="${IMG}:${{ steps.meta.outputs.version }}"
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAGS="${TAGS}
+          ${IMG}:latest"
+          fi
+          # Multi-line outputs use the heredoc syntax.
+          {
+            echo "tags<<EOF"
+            echo "${TAGS}"
+            echo "EOF"
+            echo "primary_tag=${IMG}:${{ steps.meta.outputs.version }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          # Push only on tag/dispatch. PRs build for validation only.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+          # provenance + sbom: opt in to BuildKit's built-in SLSA
+          # provenance attestation and SPDX SBOM generation. These get
+          # attached to the image manifest as referrers and are
+          # discoverable via `cosign download attestation`.
+          provenance: mode=max
+          sbom: true
+          # Layer cache via GHA cache. Saves ~60s on incremental builds.
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+      # ----------------------------------------------------------------
+      # Cosign keyless signing.
+      #
+      # Keyless means: no private key stored anywhere. Cosign uses the
+      # GitHub Actions OIDC token (id-token: write permission above) to
+      # request a short-lived signing certificate from Sigstore's
+      # Fulcio CA. The certificate is published to the Rekor
+      # transparency log along with the signature.
+      #
+      # Anyone in the world can later verify the signature against the
+      # original GitHub Actions identity using:
+      #
+      #   cosign verify ghcr.io/arhiax/arhiax-gateway:1.0.0 \
+      #     --certificate-identity-regexp \
+      #       'https://github.com/arhiax/arhiax/.+' \
+      #     --certificate-oidc-issuer \
+      #       'https://token.actions.githubusercontent.com'
+      #
+      # No key management. No rotation. Auditable in Rekor forever.
+      # ----------------------------------------------------------------
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.0'
+
+      - name: Sign the image
+        if: github.event_name != 'pull_request'
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+          DIGEST: ${{ steps.build.outputs.digest }}
+          PRIMARY_TAG: ${{ steps.tags.outputs.primary_tag }}
+        run: |
+          set -euo pipefail
+          # Sign by digest (not tag) so the signature is immutable.
+          # Tags can be moved; digests cannot.
+          cosign sign --yes "${PRIMARY_TAG}@${DIGEST}"
+          echo "Signed: ${PRIMARY_TAG}@${DIGEST}"
+
+      # GitHub-native build provenance attestation. This is independent
+      # of the cosign signature: it produces an attestation that GitHub
+      # itself vouches for, queryable via the GitHub API. Belt and braces.
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.IMAGE_BASE }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## ${{ matrix.image }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version: \`${{ steps.meta.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`${{ steps.meta.outputs.commit }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tags:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.tags.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "- Digest: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Signed: yes (cosign keyless)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- Push: skipped (PR build)" >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,42 @@
+apiVersion: v2
+name: arhiax-runtime
+description: |
+  ARHIAX v11.4 — Agent Trust Kernel (ATK) runtime with 19 OPA/Rego policy
+  bundles, deployed as a Kubernetes workload with an OPA sidecar, evidence
+  generation, and observability wiring.
+
+  This chart packages the Sinergia Consulting Group ARHIAX reference runtime
+  (TR-2026-034 architecture) for a production cluster deployment. It is the
+  bridge between the Capa 2+3 runtime package and a real cluster pilot
+  (e.g., SPRBUN port logistics, ARHIAX Brasil fintech, ARHIA HFL).
+
+type: application
+version: 0.1.0
+appVersion: "11.4"
+kubeVersion: ">=1.28.0-0"
+
+keywords:
+  - arhia
+  - arhiax
+  - governance
+  - ai-governance
+  - agent-trust-kernel
+  - opa
+  - policy-as-code
+  - sinergia
+
+home: https://arhia.io
+sources:
+  - https://github.com/sinergia/arhiax-runtime
+
+maintainers:
+  - name: Sinergia Consulting Group S.A.S.
+    email: ray@sinergiaconsulting.co
+    url: https://sinergiaconsulting.co
+
+annotations:
+  arhiax.spec: "TR-2026-034"
+  arhiax.phase3-spec: "TR-2026-033"
+  arhiax.bundles: "19"
+  arhiax.controls: "36"
+  category: AIGovernance

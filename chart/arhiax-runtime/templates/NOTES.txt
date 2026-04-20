@@ -1,0 +1,94 @@
+===============================================================================
+  ARHIAX Runtime v{{ .Chart.AppVersion }} installed in namespace '{{ .Release.Namespace }}'
+  Release: {{ .Release.Name }}
+===============================================================================
+
+Components deployed:
+{{- if .Values.gateway.enabled }}
+  [x] Gateway          ({{ .Values.gateway.replicaCount }} replica(s))
+{{- else }}
+  [ ] Gateway          (disabled)
+{{- end }}
+{{- if .Values.opa.enabled }}
+  [x] OPA              (bundles from: {{ .Values.opa.bundleSource.mode }})
+{{- else }}
+  [ ] OPA              (disabled)
+{{- end }}
+{{- if .Values.evidenceStore.enabled }}
+  [x] Evidence Store   (driver: {{ .Values.evidenceStore.driver }})
+{{- else }}
+  [ ] Evidence Store   (disabled)
+{{- end }}
+{{- if .Values.correlator.enabled }}
+  [x] D-TCG+ Correlator (subchart)
+{{- else }}
+  [ ] D-TCG+ Correlator (disabled - enable with --set correlator.enabled=true)
+{{- end }}
+
+{{- if .Values.gateway.enabled }}
+
+-------------------------------------------------------------------------------
+  Accessing the gateway
+-------------------------------------------------------------------------------
+{{- if .Values.gateway.ingress.enabled }}
+The gateway is exposed via Ingress:
+{{- range .Values.gateway.ingress.hosts }}
+  http{{ if $.Values.gateway.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else if eq .Values.gateway.service.type "LoadBalancer" }}
+The gateway is exposed via LoadBalancer. Get the external address with:
+
+  kubectl get svc -n {{ .Release.Namespace }} {{ include "arhiax.gateway.fullname" . }} \
+    -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+{{- else }}
+The gateway is exposed as a ClusterIP service. Port-forward to test:
+
+  kubectl port-forward -n {{ .Release.Namespace }} \
+    svc/{{ include "arhiax.gateway.fullname" . }} 8080:{{ .Values.gateway.service.port }}
+
+  curl http://localhost:8080/healthz
+{{- end }}
+{{- end }}
+
+{{- if .Values.opa.enabled }}
+
+-------------------------------------------------------------------------------
+  Verifying policy decisions
+-------------------------------------------------------------------------------
+OPA is running at: {{ include "arhiax.opa.url" . }}
+
+Test the default decision with a sample input:
+
+  kubectl run -i --rm --tty opa-probe --image=curlimages/curl:8.6.0 \
+    --restart=Never -n {{ .Release.Namespace }} -- \
+    sh -c 'curl -sS -X POST \
+      {{ include "arhiax.opa.url" . }}/v1/data/arhiax/main \
+      -H "content-type: application/json" \
+      -d "{\"input\":{\"subject\":{\"id\":\"a1\",\"roles\":[\"planner\"],\"jwt_aud\":\"arhiax\"},\"action\":{\"verb\":\"get\",\"tool\":\"web.fetch\"},\"resource\":{\"type\":\"api\",\"uri\":\"https://example.com\"},\"context\":{\"tenant\":\"acme\",\"env\":\"dev\"}}}"'
+
+Expected response: {"result":{"allow":true, ...}}
+{{- end }}
+
+{{- if and .Values.evidenceStore.enabled (eq .Values.evidenceStore.driver "sqlite") .Values.evidenceStore.persistence.enabled }}
+
+-------------------------------------------------------------------------------
+  Evidence persistence
+-------------------------------------------------------------------------------
+Evidence is persisted to PVC '{{ include "arhiax.evidenceStore.pvcName" . }}'
+(size: {{ .Values.evidenceStore.persistence.size }}, driver: sqlite).
+
+NOTE: The PVC has 'helm.sh/resource-policy: keep' so it SURVIVES helm uninstall.
+      Delete it manually with 'kubectl delete pvc' if you want to wipe evidence.
+{{- end }}
+
+-------------------------------------------------------------------------------
+  Next steps
+-------------------------------------------------------------------------------
+  - Read the full docs at https://github.com/arhiax/arhiax
+  - Extend policies by adding files to charts/arhiax-runtime/files/policies/*.rego
+  - Enable metrics scraping with --set metrics.serviceMonitor.enabled=true
+  - Enable network policies with --set networkPolicy.enabled=true
+
+Happy governing!
+===============================================================================

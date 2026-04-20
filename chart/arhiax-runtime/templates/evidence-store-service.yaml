@@ -1,0 +1,28 @@
+{{- if .Values.evidenceStore.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "arhiax.evidenceStore.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "arhiax.evidenceStore.labels" . | nindent 4 }}
+  {{- with .Values.evidenceStore.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.evidenceStore.service.type }}
+  # Headless service required by StatefulSet for stable pod DNS.
+  clusterIP: None
+  ports:
+    - name: http
+      port: {{ .Values.evidenceStore.service.port }}
+      targetPort: http
+      protocol: TCP
+    - name: metrics
+      port: {{ .Values.evidenceStore.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "arhiax.evidenceStore.selectorLabels" . | nindent 4 }}
+{{- end }}
