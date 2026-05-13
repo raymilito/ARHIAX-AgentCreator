@@ -8,7 +8,9 @@ from fastapi.testclient import TestClient
 os.environ["AIM_DB_PATH"] = ":memory:"
 os.environ["AIM_HMAC_SECRET"] = "test-secret-aim"
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+SERVICE_DIR = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, SERVICE_DIR)
+sys.modules.pop("main", None)
 from main import app, init_db
 
 @pytest.fixture(autouse=True)

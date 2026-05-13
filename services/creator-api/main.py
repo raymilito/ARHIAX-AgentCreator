@@ -24,10 +24,22 @@ AIM_URL = os.getenv("AIM_URL", "http://aim-service:8200")
 AUT_URL = os.getenv("AUT_URL", "http://aut-service:8201")
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://gateway:8080")
 HIC_URL = os.getenv("HIC_URL", "http://hic-service:8203")
+CREDENTIAL_BROKER_URL = os.getenv("CREDENTIAL_BROKER_URL", "http://credential-broker:8204")
 
 # CA cert para verificación TLS inter-servicio.
 # None → sin TLS (modo dev). Ruta al ca.crt → verifica con CA interna.
 _CA_CERT = os.getenv("ARHIAX_CA_CERT") or False
+
+# mTLS saliente: presenta cert de cliente si esta configurado.
+_CLIENT_CERT = os.getenv("ARHIAX_TLS_CLIENT_CERT")
+_CLIENT_KEY = os.getenv("ARHIAX_TLS_CLIENT_KEY")
+
+
+def _mtls_kwargs() -> dict:
+    kwargs: dict = {"verify": _CA_CERT}
+    if _CLIENT_CERT and _CLIENT_KEY:
+        kwargs["cert"] = (_CLIENT_CERT, _CLIENT_KEY)
+    return kwargs
 
 
 # ─── Modelos ────────────────────────────────────────────────────────────────
@@ -45,6 +57,7 @@ class AgentSpec(BaseModel):
     initial_autonomy_level: str = "A0"
     rotation_days: int = 90
     tags: List[str] = []
+    security_profile: Optional[dict] = None
 
 
 class GovernedAgent(BaseModel):
@@ -55,6 +68,7 @@ class GovernedAgent(BaseModel):
     gateway_url: str
     autonomy_level: str
     bootstrap_code: str
+    security_profile: dict
     status: str = "READY"
 
 
@@ -68,7 +82,7 @@ class EvaluateRequest(BaseModel):
 # ─── HTTP client helpers ─────────────────────────────────────────────────────
 
 async def _post(url: str, data: dict) -> dict:
-    async with httpx.AsyncClient(timeout=10.0, verify=_CA_CERT) as client:
+    async with httpx.AsyncClient(timeout=10.0, **_mtls_kwargs()) as client:
         r = await client.post(url, json=data)
         if r.status_code >= 400:
             raise HTTPException(502, f"Error en servicio upstream {url}: {r.text}")
@@ -76,7 +90,7 @@ async def _post(url: str, data: dict) -> dict:
 
 
 async def _get(url: str) -> dict:
-    async with httpx.AsyncClient(timeout=10.0, verify=_CA_CERT) as client:
+    async with httpx.AsyncClient(timeout=10.0, **_mtls_kwargs()) as client:
         r = await client.get(url)
         if r.status_code >= 400:
             raise HTTPException(502, f"Error en servicio upstream {url}: {r.text}")
@@ -85,7 +99,32 @@ async def _get(url: str) -> dict:
 
 # ─── Bootstrap code generator ───────────────────────────────────────────────
 
-def _generate_bootstrap_code(agent_id: str, credential: dict, gateway_url: str) -> str:
+def _default_security_profile(spec: AgentSpec) -> dict:
+    return {
+        "token_mode": "brokered_ephemeral",
+        "zero_token_in_context": True,
+        "require_pop": True,
+        "tool_token_ttl_seconds": 60,
+        "high_risk_token_ttl_seconds": 30,
+        "revocation_mode": "redis+jti",
+        "step_up_required_for": [],
+        "allowed_audiences": spec.permitted_tools or ["*"],
+        "context_binding_mode": "resource",
+        "sanitize_tool_outputs": True,
+        "enforce_broker_for_tools": True,
+    }
+
+
+def _merge_security_profile(spec: AgentSpec) -> dict:
+    profile = _default_security_profile(spec)
+    if spec.security_profile:
+        profile.update(spec.security_profile)
+    return profile
+
+
+def _generate_bootstrap_code(
+    agent_id: str, credential: dict, gateway_url: str, security_profile: dict
+) -> str:
     tools_repr = repr(credential.get("permitted_tools", []))
     return textwrap.dedent(f"""
         # ╔══════════════════════════════════════════════════════════════╗
@@ -99,13 +138,16 @@ def _generate_bootstrap_code(agent_id: str, credential: dict, gateway_url: str) 
             agent_id = "{agent_id}"
             gateway_url = "{gateway_url}"
             autonomy_level = "{credential.get('autonomy_level', 'A0')}"
+            credential_broker_url = "{CREDENTIAL_BROKER_URL}"
 
             # Herramientas permitidas para este agente:
             # {tools_repr}
 
             @governed_tool(action="toolCall", resource="mi_herramienta")
-            async def mi_herramienta(self, parametro: str) -> str:
-                # ARHIAX evalúa esta llamada automáticamente antes de ejecutar
+            async def mi_herramienta(self, parametro: str, _arhiax_runtime_auth=None) -> str:
+                # ARHIAX evalúa esta llamada y solicita token efímero al broker.
+                # _arhiax_runtime_auth llega inyectado en runtime y nunca debe
+                # exponerse al prompt, logs ni salida del modelo.
                 return f"Resultado: {{parametro}}"
 
             async def run(self, task: str):
@@ -116,7 +158,11 @@ def _generate_bootstrap_code(agent_id: str, credential: dict, gateway_url: str) 
 
         # Para iniciar el agente:
         # import asyncio
-        # agent = MiAgente(credential={repr(credential)})
+        # agent = MiAgente(
+        #     credential={repr(credential)},
+        #     security_profile={repr(security_profile)},
+        #     credential_broker_url="http://localhost:8204",
+        # )
         # asyncio.run(agent.run("Tu tarea aquí"))
     """).strip()
 
@@ -133,7 +179,7 @@ async def readyz():
     errors = {}
     for name, url in [("aim", AIM_URL), ("aut", AUT_URL), ("gateway", GATEWAY_URL)]:
         try:
-            async with httpx.AsyncClient(timeout=3.0, verify=_CA_CERT) as client:
+            async with httpx.AsyncClient(timeout=3.0, **_mtls_kwargs()) as client:
                 r = await client.get(f"{url}/healthz")
                 if r.status_code != 200:
                     errors[name] = f"HTTP {r.status_code}"
@@ -157,6 +203,7 @@ async def create_governed_agent(spec: AgentSpec):
     """
 
     # Paso 1: Registrar en AIM
+    security_profile = _merge_security_profile(spec)
     credential = await _post(f"{AIM_URL}/v1/agents/register", {
         "name": spec.name,
         "description": spec.description,
@@ -168,15 +215,18 @@ async def create_governed_agent(spec: AgentSpec):
         "permitted_data_scopes": spec.permitted_data_scopes,
         "permitted_operations": spec.permitted_operations,
         "rotation_days": spec.rotation_days,
+        "security_profile": security_profile,
     })
 
     agent_id = credential["agent_id"]
+    security_profile = credential.get("security_profile") or security_profile
+    credential["security_profile"] = security_profile
 
     # Paso 2: Inicializar nivel de autonomía en AUT
     await _get(f"{AUT_URL}/v1/autonomy/{agent_id}")
 
     # Paso 3: Generar código de bootstrap
-    bootstrap = _generate_bootstrap_code(agent_id, credential, GATEWAY_URL)
+    bootstrap = _generate_bootstrap_code(agent_id, credential, GATEWAY_URL, security_profile)
 
     return GovernedAgent(
         agent_id=agent_id,
@@ -185,6 +235,7 @@ async def create_governed_agent(spec: AgentSpec):
         gateway_url=GATEWAY_URL,
         autonomy_level="A0",
         bootstrap_code=bootstrap,
+        security_profile=security_profile,
         status="READY",
     )
 

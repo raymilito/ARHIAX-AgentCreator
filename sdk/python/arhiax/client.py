@@ -1,9 +1,10 @@
 """Cliente HTTP del SDK ARHIAX.
-Comunicación con Gateway, AIM, HIC y BBR con retry y circuit breaker.
+Comunicación con Gateway, AIM, HIC, BBR y Credential Broker.
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -11,7 +12,20 @@ from typing import Any, Dict, Optional
 import httpx
 
 from .exceptions import ARHIAXServiceUnavailable
-from .models import Credential, GovernanceDecision, DecisionOutcome
+from .models import Credential, GovernanceDecision, DecisionOutcome, EphemeralToolToken
+
+
+def _tls_kwargs() -> Dict[str, Any]:
+    verify: Any = os.getenv("ARHIAX_CA_CERT") or True
+    if os.getenv("ARHIAX_TLS_VERIFY", "true").lower() in {"0", "false", "no"}:
+        verify = False
+
+    kwargs: Dict[str, Any] = {"verify": verify}
+    cert = os.getenv("ARHIAX_TLS_CLIENT_CERT")
+    key = os.getenv("ARHIAX_TLS_CLIENT_KEY")
+    if cert and key:
+        kwargs["cert"] = (cert, key)
+    return kwargs
 
 
 class _CircuitBreaker:
@@ -22,6 +36,14 @@ class _CircuitBreaker:
         self._threshold = fail_threshold
         self._recovery = recovery_s
         self._opened_at: Optional[float] = None
+
+    @property
+    def state(self) -> str:
+        return "OPEN" if self._opened_at is not None else "CLOSED"
+
+    @property
+    def failure_count(self) -> int:
+        return self._failures
 
     def is_open(self) -> bool:
         if self._opened_at is None:
@@ -49,7 +71,8 @@ class GatewayClient:
         self._url = gateway_url.rstrip("/")
         self._timeout = timeout
         self._max_retries = max_retries
-        self._cb = _CircuitBreaker()
+        self._breaker = _CircuitBreaker()
+        self._cb = self._breaker
 
     async def decide(
         self,
@@ -57,35 +80,61 @@ class GatewayClient:
         action: str,
         resource: str,
         context: Dict[str, Any],
+        invocation_id: Optional[str] = None,
     ) -> GovernanceDecision:
-        if self._cb.is_open():
+        if self._breaker.is_open():
             raise ARHIAXServiceUnavailable("gateway", "Circuit breaker abierto")
+
+        merged_context: Dict[str, Any] = {
+            "invocationId": invocation_id or context.get("invocationId") or str(uuid.uuid4()),
+            **context,
+        }
+        # El invocationId del argumento siempre gana frente al que venga embebido en context
+        if invocation_id:
+            merged_context["invocationId"] = invocation_id
 
         payload = {
             "subject": subject,
             "action": action,
             "resource": resource,
-            "context": {"invocationId": str(uuid.uuid4()), **context},
+            "context": merged_context,
         }
+
+        # Idempotency-Key: el invocationId es estable a traves de reintentos
+        headers = {}
+        idem = merged_context.get("invocationId")
+        if idem:
+            headers["Idempotency-Key"] = str(idem)
 
         last_exc: Optional[Exception] = None
         for attempt in range(self._max_retries):
             try:
-                async with httpx.AsyncClient(timeout=self._timeout) as client:
-                    r = await client.post(f"{self._url}/v1/decide", json=payload)
-                self._cb.record_success()
+                async with httpx.AsyncClient(timeout=self._timeout, **_tls_kwargs()) as client:
+                    r = await client.post(
+                        f"{self._url}/v1/decide", json=payload, headers=headers
+                    )
+                self._breaker.record_success()
 
                 data = r.json()
                 allow = data.get("allow", False)
                 reasons = data.get("reasons", [])
                 obligations = data.get("obligations", [])
                 evidence_id = data.get("evidence_id", "")
+                gateway_outcome = data.get("outcome")
 
-                if not allow:
-                    if "INJECTION_DETECTED" in reasons:
-                        outcome = DecisionOutcome.DENY_WITH_INCIDENT
-                    else:
-                        outcome = DecisionOutcome.DENY
+                # Si el gateway/OPA emitio un outcome explicito lo respetamos.
+                # Caso contrario inferimos por compatibilidad hacia atras.
+                if gateway_outcome:
+                    try:
+                        outcome = DecisionOutcome(gateway_outcome)
+                    except ValueError:
+                        outcome = DecisionOutcome.ALLOW if allow else DecisionOutcome.DENY
+                elif not allow:
+                    outcome = (
+                        DecisionOutcome.DENY_WITH_INCIDENT
+                        if "INJECTION_DETECTED" in reasons
+                        else DecisionOutcome.DENY
+                    )
                 else:
                     outcome = DecisionOutcome.ALLOW
 
@@ -96,12 +145,12 @@ class GatewayClient:
                 )
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                self._cb.record_failure()
+                self._breaker.record_failure()
                 if attempt < self._max_retries - 1:
                     await asyncio.sleep(0.5 * (attempt + 1))
             except Exception as exc:
                 last_exc = exc
-                self._cb.record_failure()
+                self._breaker.record_failure()
                 break
 
         raise ARHIAXServiceUnavailable("gateway", str(last_exc))
@@ -116,7 +165,7 @@ class AIMClient:
 
     async def get_credential(self, agent_id: str) -> Credential:
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, **_tls_kwargs()) as client:
                 r = await client.get(f"{self._url}/v1/credentials/{agent_id}")
             if r.status_code == 404:
                 raise ARHIAXServiceUnavailable("aim", f"Agente {agent_id} no encontrado")
@@ -138,7 +187,7 @@ class HICClient:
         reason: str, severity: str = "MEDIUM", context: dict = {},
     ) -> str:
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, **_tls_kwargs()) as client:
                 r = await client.post(f"{self._url}/v1/tickets", json={
                     "agent_id": agent_id, "action": action,
                     "resource": resource, "reason": reason,
@@ -151,7 +200,7 @@ class HICClient:
 
     async def get_ticket_status(self, ticket_id: str) -> str:
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, **_tls_kwargs()) as client:
                 r = await client.get(f"{self._url}/v1/tickets/{ticket_id}")
             return r.json().get("status", "UNKNOWN")
         except Exception:
@@ -171,7 +220,7 @@ class BBRClient:
         outcome: str = "ALLOW", tool_name: Optional[str] = None,
     ) -> None:
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, **_tls_kwargs()) as client:
                 await client.post(f"{self._url}/v1/baseline/{agent_id}/observe", json={
                     "agent_id": agent_id, "operation_type": operation_type,
                     "duration_ms": duration_ms, "token_count": token_count,
@@ -179,3 +228,50 @@ class BBRClient:
                 })
         except Exception:
             pass  # BBR es fail-open
+
+
+class CredentialBrokerClient:
+    """Cliente del Credential Broker para tokens efímeros por acción."""
+
+    def __init__(self, broker_url: str, timeout: float = 5.0):
+        self._url = broker_url.rstrip("/")
+        self._timeout = timeout
+
+    async def issue_tool_token(
+        self,
+        *,
+        agent_id: str,
+        tool_name: str,
+        audience: str,
+        scope: str,
+        invocation_id: str,
+        context_binding: Dict[str, str],
+        ttl_seconds: int,
+        requested_autonomy_level: str,
+        dpop_jwk: Optional[Dict[str, str]] = None,
+        act_chain: Optional[list] = None,
+        agent_credential_hmac: Optional[str] = None,
+    ) -> EphemeralToolToken:
+        payload = {
+            "agent_id": agent_id,
+            "tool_name": tool_name,
+            "audience": audience,
+            "scope": scope,
+            "invocation_id": invocation_id,
+            "context_binding": context_binding,
+            "ttl_seconds": ttl_seconds,
+            "requested_autonomy_level": requested_autonomy_level,
+        }
+        if dpop_jwk:
+            payload["dpop_jwk"] = dpop_jwk
+        if act_chain:
+            payload["act_chain"] = list(act_chain)
+        if agent_credential_hmac:
+            payload["agent_credential_hmac"] = agent_credential_hmac
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, **_tls_kwargs()) as client:
+                r = await client.post(f"{self._url}/v1/tokens/tool", json=payload)
+            r.raise_for_status()
+            return EphemeralToolToken(**r.json())
+        except httpx.HTTPError as exc:
+            raise ARHIAXServiceUnavailable("credential-broker", str(exc))

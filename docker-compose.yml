@@ -29,6 +29,8 @@ volumes:
   hic-data:
   evidence-data:
   opa-bundles:
+  redis-data:
+  broker-keys:
 
 # Volumen compartido de certificados (read-only en todos los servicios)
 x-certs-volume: &certs-volume
@@ -66,6 +68,30 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ── Redis — Store de jti (replay + revocacion) ─────────────────────────
+  # Backend persistente para deteccion de replay y revocacion de tokens
+  # efimeros del gateway. Usa AOF para no perder estado en reinicios.
+  redis:
+    image: redis:7.4-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "256mb"
+      - --maxmemory-policy
+      - "volatile-lru"
+    volumes:
+      - redis-data:/data
+    networks:
+      - arhiax-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   # ── Evidence Store — Ledger inmutable ───────────────────────────────────
   evidence-store:
     build:
@@ -76,6 +102,12 @@ services:
     environment:
       LEDGER_PATH: /data/evidence.jsonl
       EVIDENCE_HMAC_SECRET: ${EVIDENCE_HMAC_SECRET:-arhiax-evidence-secret-CHANGE-ME}
+      # Vault opcional — si VAULT_ADDR + VAULT_TOKEN estan definidos en el
+      # entorno, el servicio lee el secreto en arhiax/evidence#hmac antes de
+      # caer al env var.
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
     volumes:
       - evidence-data:/data
       - *certs-volume
@@ -107,12 +139,24 @@ services:
       EVIDENCE_STORE_URL: https://evidence-store:8090
       MAX_REQUEST_BODY_BYTES: "1048576"
       ARHIAX_CA_CERT: /certs/ca.crt
+      ARHIAX_TLS_CLIENT_CERT: /certs/gateway.crt
+      ARHIAX_TLS_CLIENT_KEY: /certs/gateway.key
+      ARHIAX_REQUIRE_MTLS: "true"
+      ARHIAX_REDIS_URL: redis://redis:6379/0
+      ARHIAX_REDIS_PREFIX: arhiax:gw
+      GATEWAY_PUBLIC_URL: https://gateway:8080
+      BROKER_JWKS_URL: https://credential-broker:8204/.well-known/jwks.json
+      BROKER_JWKS_REFRESH_SECONDS: "300"
     volumes:
       - *certs-volume
     depends_on:
       opa:
         condition: service_healthy
       evidence-store:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      credential-broker:
         condition: service_healthy
     <<: *python-base
     healthcheck:
@@ -140,6 +184,10 @@ services:
     environment:
       AIM_HMAC_SECRET: ${AIM_HMAC_SECRET:-arhiax-aim-secret-CHANGE-ME}
       AIM_DB_PATH: /data/aim.db
+      # Vault opcional — leera arhiax/aim#hmac si VAULT_ADDR+TOKEN existen.
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
     volumes:
       - aim-data:/data
       - *certs-volume
@@ -245,6 +293,44 @@ services:
       retries: 3
 
   # ── Creator API — Fábrica de agentes gobernados ─────────────────────────
+  credential-broker:
+    build:
+      context: ./services/credential-broker
+      dockerfile: Dockerfile
+    ports:
+      - "8204:8204"
+    environment:
+      BROKER_DEFAULT_TTL_SECONDS: "60"
+      BROKER_MAX_TTL_SECONDS: "300"
+      BROKER_SIGNING_KEY_PATH: /data/broker_signing_key.pem
+      BROKER_PERSIST_KEY: "true"
+      AIM_URL: https://aim-service:8200
+      ARHIAX_CA_CERT: /certs/ca.crt
+      ARHIAX_TLS_CLIENT_CERT: /certs/credential-broker.crt
+      ARHIAX_TLS_CLIENT_KEY: /certs/credential-broker.key
+      ARHIAX_REQUIRE_MTLS: "true"
+    volumes:
+      - broker-keys:/data
+      - *certs-volume
+    depends_on:
+      aim-service:
+        condition: service_healthy
+    <<: *python-base
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - >
+          if [ -f /certs/credential-broker.crt ]; then
+            curl -sf --cacert /certs/ca.crt https://localhost:8204/healthz;
+          else
+            curl -sf http://localhost:8204/healthz;
+          fi
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
   creator-api:
     build:
       context: ./services/creator-api
@@ -256,7 +342,11 @@ services:
       AUT_URL: https://aut-service:8201
       GATEWAY_URL: https://gateway:8080
       HIC_URL: https://hic-service:8203
+      CREDENTIAL_BROKER_URL: https://credential-broker:8204
       ARHIAX_CA_CERT: /certs/ca.crt
+      ARHIAX_TLS_CLIENT_CERT: /certs/creator-api.crt
+      ARHIAX_TLS_CLIENT_KEY: /certs/creator-api.key
+      ARHIAX_REQUIRE_MTLS: "true"
     volumes:
       - *certs-volume
     depends_on:
@@ -265,6 +355,8 @@ services:
       aim-service:
         condition: service_healthy
       aut-service:
+        condition: service_healthy
+      credential-broker:
         condition: service_healthy
     <<: *python-base
     healthcheck:

@@ -1,350 +1,231 @@
 # Arquitectura ARHIAX AgentCreator
 
-## Visión general
+Documento en ASCII para evitar problemas de encoding.
 
-ARHIAX AgentCreator implementa el principio de **gobernanza por diseño**: los agentes no son supervisados después de crearse, sino que nacen con los mecanismos de gobernanza integrados desde su primer instante de existencia.
+## Vision general
 
-El sistema tiene dos capas distintas que trabajan en conjunto:
+ARHIAX AgentCreator implementa gobernanza por diseno: los agentes nacen con identidad, autonomia, politica, auditoria, aprobacion humana y autorizacion efimera por accion.
 
-1. **Capa de creación** — El Creator API y sus servicios de soporte (AIM, AUT) que provisionan el agente
-2. **Capa de operación** — El Gateway, OPA, Evidence Store, BBR y HIC que gobiernan cada acción del agente en tiempo de ejecución
+La arquitectura se organiza en tres capas:
 
----
+1. Capa de creacion: Creator API, AIM y AUT.
+2. Capa de operacion: Gateway, OPA, HIC, BBR y Evidence Store.
+3. Capa de autorizacion efimera: Credential Broker, DPoP, Redis/JTI y mTLS.
 
-## Diagrama de arquitectura completo
+## Diagrama logico
 
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                        ARHIAX AgentCreator                                 ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                            ║
-║  CAPA DE CREACIÓN                                                          ║
-║  ─────────────────────────────────────────────────────────────────         ║
-║                                                                            ║
-║  Developer / Operador                                                      ║
-║       │                                                                    ║
-║       │ POST /v1/agents/create                                             ║
-║       ▼                                                                    ║
-║  ┌─────────────────────────────────────────────────────────────┐           ║
-║  │                  Creator API  :8300                         │           ║
-║  │                                                             │           ║
-║  │  1. Valida AgentSpec (nombre, depto, tools, operaciones)   │           ║
-║  │  2. Registra en AIM → obtiene credencial 10 campos         │           ║
-║  │  3. Inicializa en AUT → nivel A0                           │           ║
-║  │  4. Genera bootstrap code con SDK                          │           ║
-║  │  5. Devuelve GovernedAgent {agent_id, credential, code}    │           ║
-║  └──────┬─────────────────────────────────────┬───────────────┘           ║
-║         │                                     │                           ║
-║         ▼                                     ▼                           ║
-║  ┌───────────────────┐               ┌──────────────────────┐             ║
-║  │   AIM Service     │               │    AUT Service       │             ║
-║  │   :8200           │               │    :8201             │             ║
-║  │                   │               │                      │             ║
-║  │  • Registra agente│               │  • Inicializa A0     │             ║
-║  │  • Emite credencial               │  • Guarda umbral σ   │             ║
-║  │    (10 campos)    │               │  • Historial niveles │             ║
-║  │  • HMAC chain     │               │  • 5 puertas promo.  │             ║
-║  │  • SQLite DB      │               │  • SQLite DB         │             ║
-║  └───────────────────┘               └──────────────────────┘             ║
-║                                                                            ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                            ║
-║  CAPA DE OPERACIÓN  (gobernanza en tiempo real)                            ║
-║  ─────────────────────────────────────────────────────────────────         ║
-║                                                                            ║
-║  Agente IA (usando SDK)                                                    ║
-║       │                                                                    ║
-║       │  @governed_tool → decide(action, resource, context)               ║
-║       ▼                                                                    ║
-║  ┌─────────────────────────────────────────────────────────────┐           ║
-║  │                   Gateway (PEP)  :8080                      │           ║
-║  │                                                             │           ║
-║  │  1. Recibe POST /v1/decide {subject, action, resource}     │           ║
-║  │  2. Verifica tamaño del body (max 1 MiB)                   │           ║
-║  │  3. Detecta patrones de inyección en payload               │           ║
-║  │  4. Consulta OPA para evaluación de políticas              │           ║
-║  │  5. Registra decisión en Evidence Store                    │           ║
-║  │  6. Devuelve {allow, reasons, obligations, evidence_id}    │           ║
-║  └──────┬────────────────────────────────────┬────────────────┘           ║
-║         │                                    │                            ║
-║         │ POST /v1/data/arhiax/main          │ POST /v1/evidence          ║
-║         ▼                                    ▼                            ║
-║  ┌───────────────────┐               ┌──────────────────────┐             ║
-║  │   OPA Engine      │               │   Evidence Store     │             ║
-║  │   :8181           │               │   :8090              │             ║
-║  │                   │               │                      │             ║
-║  │  19 bundles Rego  │               │  • JSONL append-only │             ║
-║  │  B01 – B19        │               │  • HMAC-SHA256 chain │             ║
-║  │  deny-by-default  │               │  • Merkle integrity  │             ║
-║  │  Evaluación <5ms  │               │  • Retención tier    │             ║
-║  └───────────────────┘               │    T1=7yr T2=3yr T3=1yr           ║
-║                                      └──────────────────────┘             ║
-║                                                                            ║
-║  SDK maneja los outcomes:                                                  ║
-║  ┌─────────────────────────────────────────────────────────────┐           ║
-║  │                   ARHIAX SDK                                │           ║
-║  │                                                             │           ║
-║  │  ALLOW              → ejecuta la acción                    │           ║
-║  │  ALLOW+MONITORING   → ejecuta + registra en BBR            │           ║
-║  │  ALLOW+HIC          → ejecuta + abre ticket HIC            │──────────►║
-║  │  DENY               → lanza ARHIAXDenied                   │       ┌──────────────┐
-║  │  DENY+INCIDENT      → lanza ARHIAXInjectionDetected        │       │ HIC Service  │
-║  │  ESCALATE_TO_HUMAN  → lanza ARHIAXEscalated + ticket HIC   │──────►│ :8203        │
-║  └──────────────────────────────────┬──────────────────────────┘       │ Tickets SLA  │
-║                                     │                                   │ Webhooks     │
-║                                     │ observaciones BBR                 └──────────────┘
-║                                     ▼                                                   ║
-║                          ┌──────────────────────┐                                       ║
-║                          │    BBR Service       │                                       ║
-║                          │    :8202             │                                       ║
-║                          │                      │                                       ║
-║                          │  • Registra duración │                                       ║
-║                          │  • Tokens usados     │                                       ║
-║                          │  • Calcula σ         │                                       ║
-║                          │  • Detecta drift     │                                       ║
-║                          └──────────────────────┘                                       ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+```text
+Developer / Operator
+  |
+  v
+Creator API (:8300)
+  |-- AIM (:8200)
+  |     - identity
+  |     - credential
+  |     - lifecycle
+  |     - security_profile
+  |
+  |-- AUT (:8201)
+  |     - autonomy A0-A4
+  |     - promotion gates
+  |
+  v
+Governed Agent + ARHIAX SDK
+  |
+  |-- Gateway (:8080)
+  |     - policy enforcement
+  |     - injection screening
+  |     - ephemeral token validation
+  |
+  |-- Credential Broker (:8204)
+  |     - ES256 token minting
+  |     - AIM authorization
+  |     - DPoP binding
+  |
+  |-- HIC (:8203)
+  |     - human step-up
+  |
+  |-- BBR (:8202)
+  |     - behavior observation
+  |
+  v
+Evidence Store (:8090)
+  - immutable HMAC ledger
+
+OPA (:8181)
+  - Rego policies
+
+Redis (:6379)
+  - replay protection
+  - jti revocation
+  - idempotency cache
 ```
 
----
+## Flujo de creacion
 
-## Flujo de creación de un agente (CAPA 1)
-
-```
-Developer                Creator API           AIM Service          AUT Service
-    │                        │                      │                    │
-    │  POST /v1/agents/create │                      │                    │
-    │  {name, dept, tools...} │                      │                    │
-    │────────────────────────►│                      │                    │
-    │                        │                      │                    │
-    │                        │  POST /register      │                    │
-    │                        │  {name, dept, ...}   │                    │
-    │                        │─────────────────────►│                    │
-    │                        │                      │  Genera agent_id   │
-    │                        │                      │  Crea credencial   │
-    │                        │                      │  Computa HMAC      │
-    │                        │  {credential 10 flds}│                    │
-    │                        │◄─────────────────────│                    │
-    │                        │                      │                    │
-    │                        │  GET /autonomy/{id}  │                    │
-    │                        │──────────────────────────────────────────►│
-    │                        │                      │  Inicializa A0     │
-    │                        │  {level: A0, σ: 1.5} │                    │
-    │                        │◄──────────────────────────────────────────│
-    │                        │                      │                    │
-    │                        │  Genera bootstrap code SDK               │
-    │                        │                      │                    │
-    │  {agent_id,            │                      │                    │
-    │   credential,          │                      │                    │
-    │   bootstrap_code,      │                      │                    │
-    │   gateway_url}         │                      │                    │
-    │◄────────────────────────│                      │                    │
+```text
+Client
+  |
+  | POST /v1/agents/create
+  v
+Creator API
+  |
+  | POST /v1/agents/register
+  v
+AIM -> credential + security_profile
+  |
+  | GET /v1/autonomy/{agent_id}
+  v
+AUT -> A0 baseline
+  |
+  v
+Creator API -> GovernedAgent response + bootstrap code
 ```
 
----
+## Flujo runtime con token efimero
 
-## Flujo de operación de una acción (CAPA 2)
-
-```
-Agente SDK               Gateway              OPA            Evidence Store      HIC
-    │                       │                   │                   │              │
-    │  @governed_tool       │                   │                   │              │
-    │  decide(action, ...)  │                   │                   │              │
-    │──────────────────────►│                   │                   │              │
-    │                       │                   │                   │              │
-    │                       │ ¿inyección?       │                   │              │
-    │                       │ (local check)     │                   │              │
-    │                       │                   │                   │              │
-    │                       │  POST /v1/data/   │                   │              │
-    │                       │  arhiax/main      │                   │              │
-    │                       │  {input: {...}}   │                   │              │
-    │                       │──────────────────►│                   │              │
-    │                       │  {allow, reasons} │                   │              │
-    │                       │◄──────────────────│                   │              │
-    │                       │                   │                   │              │
-    │                       │  POST /v1/evidence│                   │              │
-    │                       │  {subject, action,│                   │              │
-    │                       │   decision, ...}  │                   │              │
-    │                       │──────────────────────────────────────►│              │
-    │                       │  {id, hash}       │                   │              │
-    │                       │◄──────────────────────────────────────│              │
-    │                       │                   │                   │              │
-    │  {allow, evidence_id} │                   │                   │              │
-    │◄──────────────────────│                   │                   │              │
-    │                       │                   │                   │              │
-    │  Si ALLOW_WITH_HIC:   │                   │                   │              │
-    │──────────────────────────────────────────────────────────────────────────────►
-    │  POST /v1/tickets     │                   │                   │              │
-    │  {agent_id, action,   │                   │                   │  Abre ticket │
-    │   severity, ...}      │                   │                   │  Webhook →   │
-    │◄──────────────────────────────────────────────────────────────────────────────
-    │  {ticket_id, deadline}│                   │                   │              │
-    │                       │                   │                   │              │
-    │  Registra observación │                   │                   │              │
-    │  en BBR (async)       │                   │                   │              │
+```text
+ARHIAXAgent.@governed_tool
+  |
+  | 1. POST /v1/decide without token
+  v
+Gateway + OPA
+  |
+  | 2. If ESCALATE_TO_HUMAN: open HIC ticket, wait approval, reevaluate
+  v
+Credential Broker
+  |
+  | 3. Validate AIM credential_hmac, lifecycle, operation, tool/scope/audience
+  v
+JWT ES256 + cnf.jkt
+  |
+  | 4. POST /v1/decide with ephemeralAuth + DPoP proof
+  v
+Gateway validation
+  |
+  | verifies signature, aud, exp, nbf, jti, context_binding, DPoP and replay
+  v
+Tool runtime
+  |
+  | records observation
+  v
+BBR + Evidence Store
 ```
 
----
+## Credential Broker
 
-## Modelo de datos: Credencial (10 campos)
+The Broker issues short-lived, action-scoped JWTs. It does not issue broad session tokens.
 
+Token binding dimensions:
+
+- `sub`: requesting agent.
+- `aud`: target tool or target agent.
+- `scope`: exact action permission.
+- `jti`: unique token identifier.
+- `invocation_id`: runtime invocation.
+- `context_binding`: resource-specific binding.
+- `cnf.jkt`: DPoP public key thumbprint.
+- `act`: delegation chain for inter-agent calls.
+
+## Gateway security responsibilities
+
+Gateway is both Policy Enforcement Point and token verifier:
+
+- screen payloads for injection patterns.
+- call OPA for policy decision.
+- verify ES256 signature via Broker JWKS.
+- verify DPoP proof-of-possession.
+- reject expired, future, revoked or replayed tokens.
+- enforce `aud` and `context_binding`.
+- record evidence.
+- emit SIEM-ready metrics.
+
+## SecurityProfile
+
+AIM credentials include `security_profile`. The SDK reads it automatically.
+
+```json
+{
+  "token_mode": "brokered_ephemeral",
+  "zero_token_in_context": true,
+  "require_pop": true,
+  "tool_token_ttl_seconds": 60,
+  "high_risk_token_ttl_seconds": 30,
+  "revocation_mode": "redis+jti",
+  "allowed_audiences": ["consultar_datos"],
+  "context_binding_mode": "resource",
+  "sanitize_tool_outputs": true,
+  "enforce_broker_for_tools": true,
+  "enable_hic_step_up": true
+}
 ```
+
+## Data models
+
+### Credential
+
+```text
 Credential
-├── agent_id                    "agent-a1b2c3d4e5f6"
-├── name                        "AgenteDeAnalisis-v1"
-├── supervisor_id               "supervisor-humano-001"
-├── department_id               "dept-analytics"
-├── authorization_boundary_id   "boundary-finanzas"
-├── autonomy_level              "A0" → "A1" → ... → "A4"
-├── credential_issued_at        "2026-04-19T12:00:00Z"
-├── credential_expires_at       "2026-07-18T12:00:00Z"
-├── rotation_policy             "90d"
-├── lifecycle_state             "ACTIVE" | "ROTATING" | "SUSPENDED" | "RETIRED"
-├── parent_chain_hmac           "sha256:abc123..." (cadena HMAC de identidad)
-├── permitted_tools             ["consultar_db", "generar_reporte"]
-├── permitted_data_scopes       ["analytics", "reportes"]
-└── permitted_operations        ["modelInvoke", "toolCall", "dataAccess"]
+  agent_id
+  name
+  supervisor_id
+  department_id
+  authorization_boundary_id
+  autonomy_level
+  credential_issued_at
+  credential_expires_at
+  rotation_policy
+  lifecycle_state
+  parent_chain_hmac
+  permitted_tools
+  permitted_data_scopes
+  permitted_operations
+  security_profile
 ```
 
----
+### GovernanceDecision
 
-## Modelo de datos: GovernanceDecision
-
-```
+```text
 GovernanceDecision
-├── allow           bool
-├── outcome         ALLOW | ALLOW_WITH_MONITORING | ALLOW_WITH_HIC_NOTIFICATION
-│                   DENY | DENY_WITH_INCIDENT | ESCALATE_TO_HUMAN
-├── reasons         ["POLICY_DENY", "INJECTION_DETECTED", ...]
-├── obligations     [{"type": "rate_limit", "value": 100}]
-├── evidence_id     "ev-0000001234"
-└── hic_ticket_id   "hic-a1b2c3d4e5"  (si aplica)
+  allow
+  outcome
+  reasons
+  obligations
+  evidence_id
+  hic_ticket_id
 ```
 
----
+Outcomes:
 
-## Modelo de datos: EvidenceRecord (ledger)
+- `ALLOW`
+- `ALLOW_WITH_MONITORING`
+- `ALLOW_WITH_HIC_NOTIFICATION`
+- `DENY`
+- `DENY_WITH_INCIDENT`
+- `ESCALATE_TO_HUMAN`
 
-```
-EvidenceRecord (en ledger JSONL)
-├── id                  "ev-0000001234"
-├── sequence_number     1234
-├── timestamp           "2026-04-19T12:00:05Z"
-├── subject             "agent-a1b2c3d4e5f6"
-├── action              "toolCall"
-├── resource            "consultar_base_datos"
-├── context             {invocationId, operationType, ...}
-├── decision            true | false
-├── reasons             []
-├── obligations         []
-├── prev_hash           "sha256:prev..."    ← cadena Merkle
-└── entry_hmac          "sha256:current..." ← HMAC de este registro
-```
+## Design principles
 
----
+| Principle | Implementation |
+| --- | --- |
+| Governed by design | Agents are created with identity, policy and runtime controls |
+| Deny by default | OPA denies unless policy allows |
+| Zero token in prompt | Tokens stay in runtime/tool layer |
+| Proof of possession | DPoP binds token to private key |
+| Least privilege | Token scope is one action |
+| Replay resistance | Redis/JTI and DPoP proof JTI |
+| Human step-up | HIC for high-risk or critical flows |
+| Evidence first | Every decision creates audit trail |
+| mTLS internal | Services authenticate over TLS |
 
-## Escala de autonomía y sus umbrales σ
+## Dependencies
 
-La escala de autonomía determina cuánta desviación conductual puede tener un agente antes de ser escalado a supervisión humana.
-
-```
-Nivel  Nombre        σ threshold  Comportamiento
-─────────────────────────────────────────────────────────────────
-A0     Inerte        1.5σ         Todas las acciones requieren aprobación
-A1     Supervisado   2.0σ         Alto impacto requiere aprobación
-A2     Guiado        2.5σ         Impacto medio requiere aprobación
-A3     Autónomo      3.0σ         Solo crítico requiere aprobación
-A4     Adaptativo    3.5σ         Solo excepciones requieren aprobación
-
-Si σ_observado > σ_umbral del nivel actual:
-  → ESCALATE_TO_HUMAN (acción bloqueada)
-  → AUT Service registra evento de degradación
-  → Nivel puede bajar automáticamente si supera 3 veces en ventana
-```
-
----
-
-## Las 5 puertas de promoción de autonomía
-
-Para subir de nivel (ej. A0 → A1), se evalúan 5 puertas simultáneamente. **Todas deben estar en verde**:
-
-```
-Puerta          Descripción
-────────────────────────────────────────────────────────────────
-G1_performance  Métricas de desempeño satisfactorias
-                (precision, recall, tasa de éxito de tareas)
-
-G2_security     Sin incidentes de seguridad en ventana de 30 días
-                (0 inyecciones, 0 violaciones de política)
-
-G3_business     Aprobación formal de la unidad de negocio
-                (stakeholder sign-off documentado)
-
-G4_history      Historial limpio de autonomía
-                (no degradaciones en últimos 30 días)
-
-G5_governance   Revisión del equipo de gobernanza aprobada
-                (audit committee sign-off)
-```
-
----
-
-## Política OPA — lógica de evaluación
-
-El Gateway consulta OPA para cada decisión. La política base sigue la lógica ARHIAX:
-
-```
-INPUT: {subject, action, resource, context}
-        │
-        ▼
-  deny-by-default
-  (allow := false si ninguna regla aplica)
-        │
-        ▼
-  ¿inyección en payload?  → DENY (INJECTION_DETECTED)
-        │
-        ▼
-  ¿tipo de operación válido?
-  (toolCall, modelInvoke, dataAccess, interAgentCall)
-        │
-        ▼
-  ¿nivel solicitado ≤ nivel certificado?
-        │
-        ▼
-  ¿acción crítica con nivel A0-A3?  → DENY
-        │
-        ▼
-  ¿acción de alto impacto?          → ALLOW + obligation: audit_log
-        │
-        ▼
-  ALLOW + obligation: rate_limit
-```
-
----
-
-## Filosofía de diseño
-
-| Principio | Implementación |
-|-----------|----------------|
-| **Gobernanza por diseño** | Los agentes nacen gobernados, no supervisados post-hoc |
-| **Deny-by-default** | OPA niega todo salvo regla explícita de permiso |
-| **Fail-closed en auth** | Si OPA o AIM no responden → DENY automático |
-| **Fail-open en auditoría** | Si Evidence Store falla → decisión igual se retorna |
-| **6 outcomes, no 2** | Gradación fina: evita bloqueos innecesarios y habilita monitoreo |
-| **Evidencia primero** | Toda decisión produce registro inmutable antes de retornar |
-| **Autonomía escalonada** | Sin saltos de nivel — solo promoción de A0→A1→A2→A3→A4 |
-| **Circuit breaker** | GatewayClient abre circuito tras 5 fallos → evita cascadas |
-
----
-
-## Dependencias y tecnologías
-
-| Componente | Tecnología | Razón |
-|-----------|-----------|-------|
-| Todos los servicios | Python 3.12 + FastAPI + uvicorn | Rapidez de desarrollo, tipado con Pydantic |
-| Almacenamiento | SQLite | Sin dependencias externas, fácil backup |
-| Ledger de evidencia | JSONL + HMAC-SHA256 | Inmutable, verificable, sin DB |
-| Políticas | OPA 0.68.0 + Rego | Estándar de facto en gobernanza de políticas |
-| HTTP cliente SDK | httpx | Async nativo, retry, timeouts |
-| Containerización | Docker + Compose | Despliegue reproducible |
-| Métricas | Prometheus text format | Sin deps externas en gateway |
+| Component | Technology |
+| --- | --- |
+| API services | Python + FastAPI |
+| Policy engine | OPA/Rego |
+| Ledger | JSONL + HMAC |
+| Replay/revocation | Redis |
+| JWT signing | ES256 / P-256 |
+| DPoP | RFC 9449 pattern |
+| Containers | Docker Compose |

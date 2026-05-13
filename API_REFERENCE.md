@@ -1,294 +1,173 @@
-# API Reference — ARHIAX AgentCreator
+# API Reference - ARHIAX AgentCreator
 
-Referencia completa de todos los endpoints del sistema.
-
----
+Documento en ASCII para evitar problemas de encoding.
 
 ## Creator API `:8300`
 
 ### `POST /v1/agents/create`
-Crea un agente gobernado completo.
 
-| Campo | Tipo | Req | Descripción |
-|-------|------|-----|-------------|
-| `name` | string | ✓ | Nombre descriptivo del agente |
-| `description` | string | | Descripción funcional |
-| `department_id` | string | ✓ | Unidad organizacional |
-| `supervisor_id` | string | ✓ | ID del supervisor humano |
-| `authorization_boundary_id` | string | | Dominio de confianza (default: "default") |
-| `permitted_tools` | string[] | | Herramientas permitidas |
-| `permitted_data_scopes` | string[] | | Scopes de datos |
-| `permitted_operations` | string[] | | Operaciones (default: modelInvoke, toolCall) |
-| `rotation_days` | int | | Días hasta expiración (default: 90) |
+Crea un agente gobernado.
 
-**Response `201`:** `GovernedAgent`
+Campos principales:
 
----
+| Campo | Tipo | Req | Descripcion |
+| --- | --- | --- | --- |
+| `name` | string | yes | Nombre del agente |
+| `description` | string | no | Descripcion funcional |
+| `department_id` | string | yes | Unidad organizacional |
+| `supervisor_id` | string | yes | Supervisor humano |
+| `authorization_boundary_id` | string | no | Dominio de confianza |
+| `permitted_tools` | string[] | no | Herramientas permitidas |
+| `permitted_data_scopes` | string[] | no | Scopes de datos |
+| `permitted_operations` | string[] | no | `modelInvoke`, `toolCall`, `dataAccess`, `interAgentCall` |
+| `rotation_days` | int | no | Vigencia de credencial |
+| `security_profile` | object | no | Perfil de tokens efimeros y seguridad runtime |
+
+Ejemplo de `security_profile`:
+
+```json
+{
+  "token_mode": "brokered_ephemeral",
+  "zero_token_in_context": true,
+  "require_pop": true,
+  "tool_token_ttl_seconds": 60,
+  "high_risk_token_ttl_seconds": 30,
+  "revocation_mode": "redis+jti",
+  "allowed_audiences": ["consultar_datos"],
+  "context_binding_mode": "resource",
+  "sanitize_tool_outputs": true,
+  "enforce_broker_for_tools": true
+}
+```
 
 ### `GET /v1/agents`
-Lista todos los agentes.
 
-**Response `200`:** `Array<{agent_id, name, autonomy_level, lifecycle_state, created_at}>`
-
----
+Lista agentes.
 
 ### `GET /v1/agents/{agent_id}`
-Detalles de un agente.
 
-**Response `200`:** `{agent_id, credential, autonomy, gateway_url}`
-
----
+Devuelve credencial, autonomia y gateway.
 
 ### `POST /v1/agents/{agent_id}/evaluate`
-Evalúa una acción sin ejecutarla (modo test).
 
-| Campo | Tipo | Req | Descripción |
-|-------|------|-----|-------------|
-| `action` | string | ✓ | Tipo de acción |
-| `resource` | string | ✓ | Recurso objetivo |
-| `context` | object | | Contexto adicional |
-| `requested_autonomy_level` | string | | Nivel solicitado (default: A1) |
-
----
+Evalua una accion sin ejecutarla.
 
 ### `POST /v1/agents/{agent_id}/promote`
-Promueve el nivel de autonomía.
 
-| Campo | Tipo | Req | Descripción |
-|-------|------|-----|-------------|
-| `target_level` | string | ✓ | Nivel objetivo (A1–A4) |
-| `gates` | object | ✓ | Las 5 puertas (G1–G5: bool) |
-| `justification` | string | | Justificación documentada |
-
----
+Solicita promocion A0-A4 con puertas G1-G5.
 
 ### `DELETE /v1/agents/{agent_id}`
-Da de baja un agente (revoca credencial).
 
-**Query:** `reviewer_id` (string, default: "system")
-
----
-
-### `GET /healthz` | `GET /readyz`
-Health y readiness. `/readyz` verifica AIM, AUT y Gateway.
-
----
+Da de baja un agente.
 
 ## Gateway `:8080`
 
 ### `POST /v1/decide`
-Evalúa si un agente puede ejecutar una acción.
 
-| Campo | Tipo | Req | Descripción |
-|-------|------|-----|-------------|
-| `subject` | string | ✓ | ID del agente |
-| `action` | string | ✓ | Tipo: toolCall, modelInvoke, dataAccess, interAgentCall |
-| `resource` | string | ✓ | Recurso objetivo |
-| `context` | object | | invocationId, operationType, input, requestedAutonomyLevel |
+Evalua una accion. Si `context.ephemeralAuth` existe, valida token efimero.
 
-**Response `200`:**
+Campos:
+
+| Campo | Tipo | Req |
+| --- | --- | --- |
+| `subject` | string | yes |
+| `action` | string | yes |
+| `resource` | string | yes |
+| `context` | object | no |
+
+`context.ephemeralAuth`:
+
 ```json
 {
-  "allow": true,
-  "reasons": [],
-  "obligations": [{"type": "rate_limit", "value": 100}],
-  "evidence_id": "ev-0000001234",
-  "error": null
+  "token": "eyJ...",
+  "jti": "jti-...",
+  "audience": "consultar_datos",
+  "scope": "tool:execute:consultar_datos",
+  "dpop": "eyJ..."
 }
 ```
 
-**Errores:**
-- `HTTP 413` — Body supera MAX_REQUEST_BODY_BYTES
-- `HTTP 503` — OPA no disponible
+Errores relevantes:
 
----
+- `401`: token invalido, expirado, revocado o DPoP faltante.
+- `403`: `aud`, `invocationId` o `context_binding` no coincide.
+- `409`: replay detectado.
+- `413`: body mayor a `MAX_REQUEST_BODY_BYTES`.
+- `503`: OPA o JWKS no disponible.
+
+### `POST /v1/ephemeral/revoke/{jti}`
+
+Revoca un `jti`. Query opcional: `ttl_seconds`.
+
+### `GET /v1/anomalies`
+
+Snapshot para SIEM: contadores y `jti` vistos desde multiples origenes.
 
 ### `GET /metrics`
-Métricas Prometheus.
 
----
+Metricas Prometheus.
+
+## Credential Broker `:8204`
+
+### `GET /.well-known/jwks.json`
+
+JWKS publica para validar tokens ES256.
+
+### `POST /v1/tokens/tool`
+
+Emite token efimero por accion.
+
+| Campo | Tipo | Req | Descripcion |
+| --- | --- | --- | --- |
+| `agent_id` | string | yes | Agente solicitante |
+| `tool_name` | string | yes | Tool o `agent:{target_agent_id}` |
+| `audience` | string | yes | Audience exacto |
+| `scope` | string | yes | `tool:execute:{tool}` o `agent:invoke:{id}` |
+| `invocation_id` | string | yes | ID de accion |
+| `context_binding` | object | no | Binding contextual |
+| `ttl_seconds` | int | no | TTL solicitado |
+| `requested_autonomy_level` | string | no | A0-A4 |
+| `dpop_jwk` | object | no | JWK publica EC P-256 |
+| `act_chain` | string[] | no | Cadena de delegacion |
+| `agent_credential_hmac` | string | yes | Prueba AIM |
 
 ## AIM Service `:8200`
 
-### `POST /v1/agents/register`
-Registra un agente y emite credencial inicial (A0).
+- `POST /v1/agents/register`
+- `GET /v1/credentials/{agent_id}`
+- `GET /v1/agents`
+- `POST /v1/credentials/{agent_id}/rotate`
+- `POST /v1/credentials/{agent_id}/revoke`
+- `POST /v1/credentials/{agent_id}/autonomy`
+- `GET /v1/credentials/{agent_id}/history`
 
-### `GET /v1/credentials/{agent_id}`
-Credencial completa del agente.
-
-### `GET /v1/agents`
-Lista todos los agentes.
-
-### `POST /v1/credentials/{agent_id}/rotate`
-Rota la credencial manteniendo el `agent_id`.
-
-### `POST /v1/credentials/{agent_id}/revoke`
-Suspende la credencial (`lifecycle_state: SUSPENDED`).
-
-### `POST /v1/credentials/{agent_id}/autonomy`
-Actualiza el `autonomy_level` en la credencial.
-
-| Campo | Tipo | Req |
-|-------|------|-----|
-| `autonomy_level` | string | ✓ (A0–A4) |
-| `reason` | string | |
-
-### `GET /v1/credentials/{agent_id}/history`
-Historial de cambios de autonomía.
-
----
+La credencial incluye `security_profile`.
 
 ## AUT Service `:8201`
 
-### `GET /v1/autonomy/{agent_id}`
-Nivel actual, umbral sigma y fecha de vigencia.
-
-### `POST /v1/autonomy/check`
-Evalúa si una acción está dentro del nivel del agente.
-
-| Campo | Tipo | Req | Descripción |
-|-------|------|-----|-------------|
-| `agent_id` | string | ✓ | |
-| `action` | string | ✓ | Acción a evaluar |
-| `requested_level` | string | ✓ | Nivel solicitado |
-| `sigma_deviation` | float | | Desviación sigma observada |
-
-**Response:** `{allowed, requires_hil, outcome, reason, effective_level}`
-
-### `POST /v1/autonomy/{agent_id}/promote`
-Solicita promoción de nivel. Evalúa 5 puertas.
-
-| Campo | Tipo | Req |
-|-------|------|-----|
-| `agent_id` | string | ✓ |
-| `target_level` | string | ✓ |
-| `gates` | object | ✓ |
-| `justification` | string | |
-
-### `POST /v1/autonomy/{agent_id}/degrade`
-Degrada un nivel. Llamado cuando σ > umbral.
-
-| Campo | Tipo | Req |
-|-------|------|-----|
-| `agent_id` | string | ✓ |
-| `reason` | string | ✓ |
-| `sigma_observed` | float | |
-
-### `GET /v1/autonomy/{agent_id}/history`
-Historial de eventos de autonomía.
-
----
+- `GET /v1/autonomy/{agent_id}`
+- `POST /v1/autonomy/check`
+- `POST /v1/autonomy/{agent_id}/promote`
+- `POST /v1/autonomy/{agent_id}/degrade`
+- `GET /v1/autonomy/{agent_id}/history`
 
 ## BBR Service `:8202`
 
-### `POST /v1/baseline/{agent_id}/observe`
-Registra una observación de comportamiento.
-
-| Campo | Tipo | Req | Descripción |
-|-------|------|-----|-------------|
-| `agent_id` | string | ✓ | |
-| `operation_type` | string | ✓ | toolCall, modelInvoke, dataAccess |
-| `tool_name` | string | | Nombre de la herramienta |
-| `duration_ms` | float | ✓ | Duración en milisegundos |
-| `token_count` | int | | Tokens consumidos |
-| `outcome` | string | | ALLOW, DENY, etc. |
-| `tags` | string[] | | Etiquetas adicionales |
-
-### `GET /v1/baseline/{agent_id}`
-Estadísticas de línea base: mean, std, sample_count, has_baseline.
-
-### `POST /v1/baseline/{agent_id}/score`
-Calcula sigma de desviación para operación específica.
-
-| Campo | Tipo | Req |
-|-------|------|-----|
-| `duration_ms` | float | ✓ |
-| `token_count` | int | ✓ |
-
-### `GET /v1/baseline/{agent_id}/observations`
-Lista observaciones recientes. `?limit=50`
-
----
+- `POST /v1/baseline/{agent_id}/observe`
+- `GET /v1/baseline/{agent_id}`
+- `POST /v1/baseline/{agent_id}/score`
+- `GET /v1/baseline/{agent_id}/observations`
 
 ## HIC Service `:8203`
 
-### `POST /v1/tickets`
-Crea ticket de aprobación humana.
-
-| Campo | Tipo | Req | Descripción |
-|-------|------|-----|-------------|
-| `agent_id` | string | ✓ | |
-| `action` | string | ✓ | Acción que requiere aprobación |
-| `resource` | string | ✓ | Recurso objetivo |
-| `reason` | string | ✓ | Por qué se escaló |
-| `severity` | string | | CRITICAL, HIGH, MEDIUM, LOW |
-| `context` | object | | Datos adicionales para el revisor |
-| `decision_id` | string | | ID de evidencia relacionada |
-
-**Response `201`:** Ticket completo con `ticket_id` y `sla_deadline`.
-
-### `GET /v1/tickets/{ticket_id}`
-Estado de un ticket.
-
-### `GET /v1/tickets`
-Lista tickets. `?agent_id=&status=&limit=`
-
-### `POST /v1/tickets/{ticket_id}/approve`
-Aprobación humana.
-
-| Campo | Tipo | Req |
-|-------|------|-----|
-| `approved` | bool | ✓ |
-| `reviewer_id` | string | ✓ |
-| `notes` | string | |
-
-### `POST /v1/tickets/{ticket_id}/reject`
-Rechazo humano. Mismos campos que approve.
-
-### `GET /v1/tickets/expired/check`
-Marca tickets vencidos por SLA. Ejecutar periódicamente.
-
----
+- `POST /v1/tickets`
+- `GET /v1/tickets/{ticket_id}`
+- `POST /v1/tickets/{ticket_id}/approve`
+- `POST /v1/tickets/{ticket_id}/reject`
 
 ## Evidence Store `:8090`
 
-### `POST /v1/evidence`
-Agrega entrada al ledger.
-
-| Campo | Tipo | Req |
-|-------|------|-----|
-| `subject` | string | ✓ |
-| `action` | string | ✓ |
-| `resource` | string | ✓ |
-| `context` | object | |
-| `decision` | bool | ✓ |
-| `reasons` | string[] | |
-| `obligations` | array | |
-
-**Response:** `{id, sequence_number, hash, timestamp}`
-
-### `GET /v1/evidence/{id}`
-Registro específico por ID.
-
-### `GET /v1/evidence`
-Lista registros. `?limit=20&subject=`
-
-### `GET /v1/head`
-Cabeza de la cadena: `{sequence, last_hash, entries}`
-
-### `GET /v1/evidence/verify/chain`
-Verifica integridad completa de la cadena HMAC.
-
----
-
-## Códigos de respuesta comunes
-
-| Código | Significado |
-|--------|-------------|
-| `200` | OK |
-| `201` | Creado |
-| `400` | Request inválido |
-| `404` | No encontrado |
-| `413` | Body demasiado grande |
-| `502` | Error de servicio upstream |
-| `503` | Servicio no disponible |
+- `POST /v1/evidence`
+- `GET /v1/evidence`
+- `GET /v1/evidence/verify/chain`
+- `GET /v1/head`

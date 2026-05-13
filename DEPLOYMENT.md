@@ -1,237 +1,151 @@
-# Guía de Despliegue — ARHIAX AgentCreator
+# Guia de Despliegue - ARHIAX AgentCreator
 
----
+Documento en ASCII para evitar problemas de encoding en Windows/GitHub.
 
-## Despliegue local (desarrollo)
+## Requisitos
 
-### Requisitos
-- Docker Desktop 4.x+
-- Docker Compose v2
-- 2 GB RAM disponibles
-- Puertos libres: 8080, 8090, 8181, 8200–8203, 8300
+- Docker Desktop 4.x o superior.
+- Docker Compose v2.
+- Python 3.10+ para SDK/tests.
+- Puertos libres: 8080, 8090, 8181, 8200-8204, 8300 y 6379.
 
-### Pasos
+## Despliegue local
 
 ```bash
-# 1. Configurar variables de entorno
 cp .env.example .env
-# Edita .env con tus valores reales
-
-# 2. Levantar todo el stack
+bash scripts/generate-certs.sh
 docker compose up -d
-
-# 3. Verificar que todos los servicios están saludables
 docker compose ps
-
-# 4. Ver logs en tiempo real
-docker compose logs -f
-
-# 5. Verificar readiness de cada servicio
-curl http://localhost:8300/readyz   # Creator API
-curl http://localhost:8080/readyz   # Gateway
-curl http://localhost:8200/readyz   # AIM
-curl http://localhost:8201/readyz   # AUT
-curl http://localhost:8202/readyz   # BBR
-curl http://localhost:8203/readyz   # HIC
-curl http://localhost:8090/readyz   # Evidence Store
 ```
 
-### Apagar
+Verificacion:
 
 ```bash
-# Apagar preservando datos
-docker compose down
-
-# Apagar y eliminar volúmenes (borrar todos los datos)
-docker compose down -v
+curl http://localhost:8300/readyz   # creator-api
+curl http://localhost:8080/readyz   # gateway
+curl http://localhost:8200/readyz   # aim-service
+curl http://localhost:8201/readyz   # aut-service
+curl http://localhost:8202/readyz   # bbr-service
+curl http://localhost:8203/readyz   # hic-service
+curl http://localhost:8204/readyz   # credential-broker
+curl http://localhost:8090/readyz   # evidence-store
 ```
 
----
+## Capa de tokens efimeros
 
-## Variables de entorno de producción
+La version actual incluye:
 
-**Nunca uses los valores por defecto en producción.** Cambia todos los secretos:
+- `credential-broker` en `:8204`.
+- JWT ES256 con JWKS publica.
+- DPoP proof-of-possession.
+- Redis para replay protection, revocacion e idempotencia.
+- mTLS interno con certificados de servicio.
+- Gateway con validacion de `jti`, `aud`, `exp`, `nbf`, `context_binding` y DPoP.
+
+Variables clave:
 
 ```bash
-# .env para producción
+ARHIAX_CA_CERT=/certs/ca.crt
+ARHIAX_TLS_CLIENT_CERT=/certs/<service>.crt
+ARHIAX_TLS_CLIENT_KEY=/certs/<service>.key
+ARHIAX_REQUIRE_MTLS=true
+ARHIAX_REDIS_URL=redis://redis:6379/0
+BROKER_JWKS_URL=https://credential-broker:8204/.well-known/jwks.json
+GATEWAY_PUBLIC_URL=https://gateway:8080
+AIM_URL=https://aim-service:8200
+BROKER_SIGNING_KEY_PATH=/data/broker_signing_key.pem
+BROKER_PERSIST_KEY=true
+```
+
+Checks post-deploy:
+
+```bash
+curl http://localhost:8204/.well-known/jwks.json | python -m json.tool
+curl http://localhost:8080/metrics | grep arhiax_gateway_jti_store_backend
+curl http://localhost:8080/v1/anomalies | python -m json.tool
+```
+
+## Secretos de produccion
+
+Nunca usar valores por defecto en produccion.
+
+```bash
 AIM_HMAC_SECRET=<64 chars random hex>
 EVIDENCE_HMAC_SECRET=<64 chars random hex>
 HIC_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK
 ```
 
-Genera secretos seguros:
+Generar secretos:
+
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
----
+## Backups
 
-## Despliegue en servidor Linux (sin Kubernetes)
+Respaldar estos volumenes:
 
-```bash
-# Instalar Docker y Docker Compose en Ubuntu 22.04
-curl -fsSL https://get.docker.com | sh
-apt-get install -y docker-compose-plugin
+- `aim-data`
+- `aut-data`
+- `bbr-data`
+- `hic-data`
+- `evidence-data`
+- `redis-data`
+- `broker-keys`
 
-# Clonar/subir el proyecto
-scp -r ARHIAX-AgentCreator/ usuario@servidor:/opt/arhiax/
-
-# En el servidor
-cd /opt/arhiax/ARHIAX-AgentCreator
-cp .env.example .env
-nano .env  # Editar secretos
-
-# Levantar en background
-docker compose up -d
-
-# Configurar reinicio automático (ya configurado en docker-compose con restart: unless-stopped)
-# Para que Docker arranque con el sistema:
-systemctl enable docker
-```
-
----
-
-## Backups de datos
-
-Los datos persistentes están en volúmenes Docker:
+Ejemplo:
 
 ```bash
-# Listar volúmenes
-docker volume ls | grep arhiax
-
-# Backup de todos los volúmenes
-for vol in aim-data aut-data bbr-data hic-data evidence-data; do
-    docker run --rm \
-        -v arhiax-agentcreator_${vol}:/data \
-        -v $(pwd)/backups:/backup \
-        alpine tar czf /backup/${vol}-$(date +%Y%m%d).tar.gz /data
-done
-
-# Restaurar un volumen
-docker run --rm \
-    -v arhiax-agentcreator_aim-data:/data \
+for vol in aim-data aut-data bbr-data hic-data evidence-data redis-data broker-keys; do
+  docker run --rm \
+    -v arhiax-agentcreator_${vol}:/data \
     -v $(pwd)/backups:/backup \
-    alpine tar xzf /backup/aim-data-20260419.tar.gz -C /
+    alpine tar czf /backup/${vol}-$(date +%Y%m%d).tar.gz /data
+done
 ```
-
----
 
 ## Monitoreo
 
-### Métricas Prometheus
+Gateway expone metricas en `http://localhost:8080/metrics`:
 
-El Gateway expone métricas en `http://localhost:8080/metrics`:
-
+```text
+arhiax_gateway_decide_total
+arhiax_gateway_ephemeral_auth_denied_total
+arhiax_gateway_replay_blocked_total
+arhiax_gateway_revoked_blocked_total
+arhiax_gateway_jti_store_backend
+arhiax_gateway_anomaly_total
 ```
-arhiax_gateway_decide_total{outcome="allow"}
-arhiax_gateway_decide_total{outcome="deny"}
-arhiax_gateway_opa_errors_total
-arhiax_gateway_evidence_errors_total
-```
 
-### Health checks
-
-Todos los servicios exponen `/healthz` y `/readyz`. Puedes monitorizarlos con cualquier herramienta de uptime (Uptime Kuma, Grafana, etc.):
+Tambien expone snapshot de anomalias:
 
 ```bash
-# Script de verificación rápida
-#!/bin/bash
-for port in 8080 8090 8200 8201 8202 8203 8300; do
-    status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$port/healthz)
-    echo "Puerto $port: $status"
-done
+curl http://localhost:8080/v1/anomalies | python -m json.tool
 ```
 
-### Verificar integridad del ledger periódicamente
+## Integridad del ledger
 
 ```bash
-# Cron job (cada hora)
-curl -s http://localhost:8090/v1/evidence/verify/chain | python -m json.tool
-
-# Si "valid": false — investigar inmediatamente
+curl http://localhost:8090/v1/evidence/verify/chain | python -m json.tool
 ```
 
----
-
-## Actualización de servicios
-
-```bash
-# Reconstruir un servicio específico sin downtime del resto
-docker compose build creator-api
-docker compose up -d --no-deps creator-api
-
-# Actualizar políticas OPA (sin reiniciar OPA)
-# Copia los nuevos bundles a runtime/bundles/
-# OPA detecta cambios automáticamente si usa file watch
-docker compose restart opa
-```
-
----
-
-## Configuración de webhook HIC para Slack
-
-1. Crear una Slack App en https://api.slack.com/apps
-2. Habilitar Incoming Webhooks
-3. Obtener URL del webhook
-4. Configurar en `.env`:
-
-```bash
-HIC_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
-```
-
-El mensaje que llega a Slack incluye:
-- Agente que lo generó
-- Acción que intenta ejecutar
-- Severidad y SLA deadline
-- URLs directas para aprobar o rechazar
-
----
+Si `valid` es `false`, detener cambios operativos y abrir investigacion forense.
 
 ## Troubleshooting
 
-### El Gateway devuelve 503
+### El gateway rechaza DPoP
 
-```bash
-# Verificar que OPA está sano
-curl http://localhost:8181/health
+- Validar que `GATEWAY_PUBLIC_URL` coincida con el `htu` que usa el SDK.
+- Validar reloj de contenedores; DPoP usa ventana corta de `iat`.
+- Confirmar que el token tiene `cnf.jkt`.
 
-# Ver logs de OPA
-docker compose logs opa
+### El broker no emite token
 
-# Verificar que los bundles se cargaron
-curl http://localhost:8181/v1/policies | python -m json.tool
-```
+- Validar `AIM_URL`.
+- Confirmar que el agente esta `ACTIVE` o `ROTATING`.
+- Confirmar que `agent_credential_hmac` coincide con AIM.
+- Confirmar que tool/scope/audience estan permitidos.
 
-### El Creator API no puede conectarse a AIM
+### Replay detectado
 
-```bash
-# Verificar red Docker
-docker compose exec creator-api curl http://aim-service:8200/healthz
-
-# Ver logs del AIM
-docker compose logs aim-service
-```
-
-### Error "permission denied" en SQLite
-
-```bash
-# Los volúmenes deben tener permisos correctos
-docker compose exec aim-service ls -la /data/
-# Si hay problema, el contenedor crea el directorio en startup
-docker compose restart aim-service
-```
-
-### Cadena HMAC del Evidence Store rota
-
-Esto indica posible tampering. **No reiniciar el Evidence Store** hasta investigar:
-
-```bash
-# Verificar la cadena
-curl http://localhost:8090/v1/evidence/verify/chain
-
-# Ver qué registro está roto
-# {"valid": false, "broken_at_sequence": 500}
-
-# Ver el registro problemático
-curl "http://localhost:8090/v1/evidence?limit=10" | python -m json.tool
-```
+Es comportamiento esperado si se reutiliza el mismo token. Emitir un token nuevo para cada tool call.

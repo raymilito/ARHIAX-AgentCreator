@@ -12,11 +12,13 @@ ORG="Sinergia Consulting Group"
 CA_CN="ARHIAX Internal CA"
 
 # Servicios que necesitan certificado (nombre = hostname Docker)
+# Todos los certs llevan serverAuth + clientAuth para soportar mTLS bidireccional.
 SERVICES=(
   "aim-service"
   "aut-service"
   "bbr-service"
   "creator-api"
+  "credential-broker"
   "evidence-store"
   "gateway"
   "hic-service"
@@ -62,12 +64,12 @@ for SVC in "${SERVICES[@]}"; do
     -subj "/C=${COUNTRY}/O=${ORG}/CN=${SVC}" \
     2>/dev/null
 
-  # SAN extension file
+  # SAN extension file — serverAuth para aceptar conexiones, clientAuth para mTLS
   cat > "${SVC}.ext" <<EOF
 [v3_req]
 subjectAltName = @alt_names
 keyUsage = digitalSignature, keyEncipherment
-extendedKeyUsage = serverAuth
+extendedKeyUsage = serverAuth, clientAuth
 
 [alt_names]
 DNS.1 = ${SVC}

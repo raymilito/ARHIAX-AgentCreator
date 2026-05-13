@@ -9,16 +9,68 @@ import json
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI(title="ARHIAX AIM Service", version="1.0.0")
+import urllib.request
+import urllib.error
 
-HMAC_SECRET = os.getenv("AIM_HMAC_SECRET", "arhiax-dev-secret-change-in-prod")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="ARHIAX AIM Service", version="1.0.0", lifespan=lifespan)
+
+
+def _load_secret_from_vault(path: str, field: str) -> Optional[str]:
+    """Lee un secreto desde Vault KV v2 si VAULT_ADDR y VAULT_TOKEN existen.
+
+    `path` es la ruta logica del KV (ej. "arhiax/aim"). `field` la clave dentro.
+    Devuelve None si Vault no esta configurado o falla; el caller debe tener
+    fallback a env var.
+    """
+    addr = os.getenv("VAULT_ADDR")
+    token = os.getenv("VAULT_TOKEN")
+    if not addr or not token:
+        return None
+    mount = os.getenv("VAULT_KV_MOUNT", "secret")
+    url = f"{addr.rstrip('/')}/v1/{mount}/data/{path.lstrip('/')}"
+    req = urllib.request.Request(url, headers={"X-Vault-Token": token})
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+        return data.get("data", {}).get("data", {}).get(field)
+    except Exception:
+        return None
+
+
+def _load_secret(env_var: str, vault_path: str, vault_field: str, default: str) -> str:
+    return (
+        _load_secret_from_vault(vault_path, vault_field)
+        or os.getenv(env_var)
+        or default
+    )
+
+
+HMAC_SECRET = _load_secret(
+    "AIM_HMAC_SECRET", "arhiax/aim", "hmac", "arhiax-dev-secret-change-in-prod"
+)
 DB_PATH = os.getenv("AIM_DB_PATH", "/data/aim.db")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_iso(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
 # ─── Modelos ────────────────────────────────────────────────────────────────
@@ -34,6 +86,7 @@ class AgentRegistration(BaseModel):
     permitted_data_scopes: List[str] = []
     permitted_operations: List[str] = ["modelInvoke", "toolCall"]
     rotation_days: int = 90
+    security_profile: dict = {}
 
 
 class Credential(BaseModel):
@@ -51,6 +104,7 @@ class Credential(BaseModel):
     permitted_tools: List[str]
     permitted_data_scopes: List[str]
     permitted_operations: List[str]
+    security_profile: dict = {}
 
 
 class AutonomyUpdate(BaseModel):
@@ -61,8 +115,11 @@ class AutonomyUpdate(BaseModel):
 # ─── DB ─────────────────────────────────────────────────────────────────────
 
 def get_db() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    db_path = os.getenv("AIM_DB_PATH", DB_PATH)
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -86,9 +143,13 @@ def init_db() -> None:
             permitted_tools         TEXT NOT NULL DEFAULT '[]',
             permitted_data_scopes   TEXT NOT NULL DEFAULT '[]',
             permitted_operations    TEXT NOT NULL DEFAULT '[]',
+            security_profile        TEXT NOT NULL DEFAULT '{}',
             created_at              TEXT NOT NULL
         )
     """)
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(agents)").fetchall()]
+    if "security_profile" not in columns:
+        conn.execute("ALTER TABLE agents ADD COLUMN security_profile TEXT NOT NULL DEFAULT '{}'")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS autonomy_history (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,15 +185,11 @@ def _row_to_credential(row: sqlite3.Row) -> Credential:
         permitted_tools=json.loads(row["permitted_tools"]),
         permitted_data_scopes=json.loads(row["permitted_data_scopes"]),
         permitted_operations=json.loads(row["permitted_operations"]),
+        security_profile=json.loads(row["security_profile"] or "{}"),
     )
 
 
 # ─── Lifecycle ──────────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def startup() -> None:
-    init_db()
-
 
 # ─── Health ─────────────────────────────────────────────────────────────────
 
@@ -157,15 +214,15 @@ async def readyz():
 @app.post("/v1/agents/register", response_model=Credential, status_code=201)
 async def register_agent(reg: AgentRegistration):
     agent_id = f"agent-{uuid.uuid4().hex[:12]}"
-    now = datetime.utcnow()
+    now = _utc_now()
     expires = now + timedelta(days=reg.rotation_days)
-    issued_at = now.isoformat() + "Z"
-    expires_at = expires.isoformat() + "Z"
+    issued_at = _utc_iso(now)
+    expires_at = _utc_iso(expires)
     chain_hmac = _chain_hmac(agent_id, reg.supervisor_id, issued_at)
 
     conn = get_db()
     conn.execute(
-        """INSERT INTO agents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        """INSERT INTO agents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             agent_id, reg.name, reg.description,
             reg.department_id, reg.supervisor_id, reg.authorization_boundary_id,
@@ -174,6 +231,7 @@ async def register_agent(reg: AgentRegistration):
             json.dumps(reg.permitted_tools),
             json.dumps(reg.permitted_data_scopes),
             json.dumps(reg.permitted_operations),
+            json.dumps(reg.security_profile or {}),
             issued_at,
         ),
     )
@@ -190,6 +248,7 @@ async def register_agent(reg: AgentRegistration):
         permitted_tools=reg.permitted_tools,
         permitted_data_scopes=reg.permitted_data_scopes,
         permitted_operations=reg.permitted_operations,
+        security_profile=reg.security_profile or {},
     )
 
 
@@ -224,26 +283,32 @@ async def rotate_credential(agent_id: str):
     if not row:
         conn.close()
         raise HTTPException(404)
-    now = datetime.utcnow()
-    issued = now.isoformat() + "Z"
-    expires = (now + timedelta(days=90)).isoformat() + "Z"
+    now = _utc_now()
+    issued = _utc_iso(now)
+    expires = _utc_iso(now + timedelta(days=90))
     new_hmac = _chain_hmac(agent_id, row["supervisor_id"], issued)
     conn.execute(
         "UPDATE agents SET credential_issued_at=?, credential_expires_at=?, parent_chain_hmac=?, lifecycle_state='ACTIVE' WHERE agent_id=?",
         (issued, expires, new_hmac, agent_id),
     )
     conn.commit()
+    row = conn.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
     conn.close()
-    return {"rotated": True, "agent_id": agent_id, "new_issued_at": issued}
+    return _row_to_credential(row)
 
 
 @app.post("/v1/credentials/{agent_id}/revoke")
 async def revoke_credential(agent_id: str):
     conn = get_db()
+    row = conn.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404)
     conn.execute("UPDATE agents SET lifecycle_state='SUSPENDED' WHERE agent_id=?", (agent_id,))
     conn.commit()
+    row = conn.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
     conn.close()
-    return {"revoked": True, "agent_id": agent_id}
+    return _row_to_credential(row)
 
 
 @app.post("/v1/credentials/{agent_id}/autonomy")
@@ -257,15 +322,16 @@ async def update_autonomy(agent_id: str, update: AutonomyUpdate):
         conn.close()
         raise HTTPException(404)
     old_level = row["autonomy_level"]
-    now = datetime.utcnow().isoformat() + "Z"
+    now = _utc_iso(_utc_now())
     conn.execute("UPDATE agents SET autonomy_level=? WHERE agent_id=?", (update.autonomy_level, agent_id))
     conn.execute(
         "INSERT INTO autonomy_history (agent_id, old_level, new_level, reason, changed_at) VALUES (?,?,?,?,?)",
         (agent_id, old_level, update.autonomy_level, update.reason, now),
     )
     conn.commit()
+    row = conn.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
     conn.close()
-    return {"agent_id": agent_id, "old_level": old_level, "new_level": update.autonomy_level}
+    return _row_to_credential(row)
 
 
 @app.get("/v1/credentials/{agent_id}/history")

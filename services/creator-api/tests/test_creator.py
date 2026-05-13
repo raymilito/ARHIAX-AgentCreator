@@ -4,6 +4,7 @@ Todos los servicios upstream (AIM, AUT, Gateway) están mockeados con httpx.
 """
 import os
 import sys
+import copy
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, AsyncMock
@@ -13,7 +14,9 @@ os.environ["AUT_URL"]     = "http://aut-mock:8201"
 os.environ["GATEWAY_URL"] = "http://gw-mock:8080"
 os.environ["HIC_URL"]     = "http://hic-mock:8203"
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+SERVICE_DIR = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, SERVICE_DIR)
+sys.modules.pop("main", None)
 
 
 MOCK_CREDENTIAL = {
@@ -52,21 +55,23 @@ def _mock_upstream():
     """Contexto que mockea AIM y AUT para creación exitosa."""
     async def fake_post(url, data):
         if "register" in url:
-            return MOCK_CREDENTIAL
+            return copy.deepcopy(MOCK_CREDENTIAL)
         if "autonomy" in url:
-            return MOCK_AUTONOMY
+            return copy.deepcopy(MOCK_AUTONOMY)
         return {}
 
     async def fake_get(url):
         if "autonomy" in url:
-            return MOCK_AUTONOMY
-        return MOCK_CREDENTIAL
+            return copy.deepcopy(MOCK_AUTONOMY)
+        return copy.deepcopy(MOCK_CREDENTIAL)
 
     return patch("main._post", fake_post), patch("main._get", fake_get)
 
 
 @pytest.fixture
 def client():
+    sys.path.insert(0, SERVICE_DIR)
+    sys.modules.pop("main", None)
     from main import app
     return TestClient(app)
 
@@ -78,10 +83,20 @@ def test_healthz(client):
 
 
 def test_readyz_upstream_ok(client):
-    async def fake_get(url):
-        return {"status": "ok"}
+    class DummyResponse:
+        status_code = 200
 
-    with patch("main._get", fake_get):
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            return DummyResponse()
+
+    with patch("main.httpx.AsyncClient", return_value=DummyClient()):
         r = client.get("/readyz")
     assert r.status_code == 200
 
@@ -99,6 +114,8 @@ def test_create_agent_ok(client):
     assert data["status"] == "READY"
     assert "bootstrap_code" in data
     assert "agent-abc123" in data["bootstrap_code"]
+    assert data["security_profile"]["token_mode"] == "brokered_ephemeral"
+    assert data["credential"]["security_profile"]["enforce_broker_for_tools"] is True
 
 
 def test_create_agent_bootstrap_contains_gateway(client):
@@ -106,6 +123,20 @@ def test_create_agent_bootstrap_contains_gateway(client):
     with p, g:
         data = client.post("/v1/agents/create", json=AGENT_SPEC).json()
     assert "gateway_url" in data["bootstrap_code"] or "gateway" in data["bootstrap_code"].lower()
+    assert "credential_broker_url" in data["bootstrap_code"]
+
+
+def test_create_agent_allows_security_profile_override(client):
+    p, g = _mock_upstream()
+    spec = dict(AGENT_SPEC)
+    spec["security_profile"] = {
+        "tool_token_ttl_seconds": 45,
+        "allowed_audiences": ["consultar_datos", "crear_acto"],
+    }
+    with p, g:
+        data = client.post("/v1/agents/create", json=spec).json()
+    assert data["security_profile"]["tool_token_ttl_seconds"] == 45
+    assert data["security_profile"]["allowed_audiences"] == ["consultar_datos", "crear_acto"]
 
 
 def test_create_agent_aim_failure(client):
@@ -144,7 +175,7 @@ def test_evaluate_action_allow(client):
             "resource": "consultar_datos",
         })
     assert r.status_code == 200
-    assert r.json()["allow"] is True
+    assert r.json()["decision"]["allow"] is True
 
 
 def test_evaluate_action_deny(client):
@@ -160,7 +191,7 @@ def test_evaluate_action_deny(client):
             "resource": "tabla-critica",
         })
     assert r.status_code == 200
-    assert r.json()["allow"] is False
+    assert r.json()["decision"]["allow"] is False
 
 
 # ── Promoción ─────────────────────────────────────────────────────────────────

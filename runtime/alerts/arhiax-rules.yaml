@@ -1,0 +1,90 @@
+groups:
+  - name: arhiax.gateway.security
+    interval: 30s
+    rules:
+
+      - alert: ArhiaxJTIMultiSource
+        expr: increase(arhiax_gateway_anomaly_total{kind="jti_multi_source"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: arhiax-gateway
+        annotations:
+          summary: "Mismo jti efimero presentado desde dos o mas IPs"
+          description: |
+            El gateway detecto que un token con el mismo jti fue presentado
+            desde origenes distintos durante los ultimos 5 minutos. Esto es
+            indicio fuerte de exfiltracion del token. Consultar
+            /v1/anomalies para obtener la lista de jti afectados y rotar.
+
+      - alert: ArhiaxAudienceMismatchBurst
+        expr: increase(arhiax_gateway_anomaly_total{kind="aud_mismatch"}[5m]) > 10
+        for: 2m
+        labels:
+          severity: high
+          service: arhiax-gateway
+        annotations:
+          summary: "Rafaga de audience mismatch (>10 en 5m)"
+          description: |
+            Multiples tokens con `aud` que no coincide con el recurso pedido.
+            Posible intento de redireccion de tokens entre audiencias.
+
+      - alert: ArhiaxDPoPFailureBurst
+        expr: increase(arhiax_gateway_anomaly_total{kind="dpop_failure"}[5m]) > 10
+        for: 2m
+        labels:
+          severity: high
+          service: arhiax-gateway
+        annotations:
+          summary: "Fallos de prueba DPoP en racha (>10 en 5m)"
+          description: |
+            Posible robo de token sin la clave DPoP del propietario.
+            Aplicar revocacion de los jti afectados via /v1/ephemeral/revoke.
+
+      - alert: ArhiaxBurstDenials
+        expr: increase(arhiax_gateway_anomaly_total{kind="burst_denials"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: high
+          service: arhiax-gateway
+        annotations:
+          summary: "Subject con rafaga de denegaciones (umbral por defecto 5/min)"
+          description: |
+            Un subject acumula >= ANOMALY_BURST_THRESHOLD denegaciones en la
+            ventana ANOMALY_BURST_WINDOW_SECONDS. Posible enumeracion o
+            ataque de credenciales. Consultar /v1/anomalies.burst_subjects.
+
+      - alert: ArhiaxReplayBlockedSpike
+        expr: rate(arhiax_gateway_replay_blocked_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: medium
+          service: arhiax-gateway
+        annotations:
+          summary: "Replays bloqueados a tasa > 0.1/s sostenida"
+          description: |
+            Tokens efimeros estan siendo reusados. Revisar logs y origen.
+
+      - alert: ArhiaxJTIStoreErrors
+        expr: increase(arhiax_gateway_jti_store_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: medium
+          service: arhiax-gateway
+        annotations:
+          summary: "Errores accediendo al store de jti (Redis)"
+          description: |
+            El backend Redis del gateway esta degradado; replay/revocacion
+            cayeron al fallback in-memory. Revisar conectividad a Redis.
+
+      - alert: ArhiaxOPAUnavailable
+        expr: increase(arhiax_gateway_opa_errors_total[5m]) > 5
+        for: 2m
+        labels:
+          severity: critical
+          service: arhiax-gateway
+        annotations:
+          summary: "OPA respondiendo con errores — politicas no evaluadas"
+          description: |
+            El gateway esta fallando-en-cerrado por OPA caido. Restaurar
+            disponibilidad de OPA.

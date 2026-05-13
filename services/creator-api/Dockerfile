@@ -13,4 +13,4 @@ EXPOSE 8300
 
 # TLS: uvicorn usa el certificado montado en /certs/<svc-name>.{crt,key}
 # Si los certificados no existen (dev local), arranca sin TLS como fallback.
-CMD ["sh", "-c",   "if [ -f /certs/creator-api.crt ] && [ -f /certs/creator-api.key ]; then      exec uvicorn main:app --host 0.0.0.0 --port 8300        --ssl-certfile /certs/creator-api.crt        --ssl-keyfile  /certs/creator-api.key;    else      echo 'WARN: TLS certs not found, starting without TLS (dev mode)' &&      exec uvicorn main:app --host 0.0.0.0 --port 8300;    fi"]
+CMD ["sh", "-c", "if [ -f /certs/creator-api.crt ] && [ -f /certs/creator-api.key ]; then   TLS_ARGS=\"--ssl-certfile /certs/creator-api.crt --ssl-keyfile /certs/creator-api.key\";   if [ -f /certs/ca.crt ] && [ \"${ARHIAX_REQUIRE_MTLS:-true}\" = \"true\" ]; then     TLS_ARGS=\"$TLS_ARGS --ssl-ca-certs /certs/ca.crt --ssl-cert-reqs 2\";   fi;   echo \"INFO: starting with TLS args: $TLS_ARGS\";   exec uvicorn main:app --host 0.0.0.0 --port 8300 $TLS_ARGS; else   echo \"WARN: TLS certs not found, starting without TLS (dev mode)\";   exec uvicorn main:app --host 0.0.0.0 --port 8300; fi"]

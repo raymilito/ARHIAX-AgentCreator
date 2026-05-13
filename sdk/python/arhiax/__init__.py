@@ -12,7 +12,7 @@ Uso rápido:
             ...
 """
 from .agent import ARHIAXAgent, governed_tool
-from .client import AIMClient, BBRClient, GatewayClient, HICClient
+from .client import AIMClient, BBRClient, CredentialBrokerClient, GatewayClient, HICClient
 from .exceptions import (
     ARHIAXCredentialExpired,
     ARHIAXDenied,
@@ -25,7 +25,9 @@ from .exceptions import (
 from .models import (
     Credential,
     DecisionOutcome,
+    EphemeralToolToken,
     GovernanceDecision,
+    SecurityProfile,
     AutonomyLevel,
 )
 
@@ -37,6 +39,7 @@ __all__ = [
     "AIMClient",
     "HICClient",
     "BBRClient",
+    "CredentialBrokerClient",
     "ARHIAXError",
     "ARHIAXDenied",
     "ARHIAXEscalated",
@@ -47,5 +50,7 @@ __all__ = [
     "Credential",
     "GovernanceDecision",
     "DecisionOutcome",
+    "SecurityProfile",
+    "EphemeralToolToken",
     "AutonomyLevel",
 ]

@@ -14,10 +14,40 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+import urllib.request
+
 app = FastAPI(title="ARHIAX Evidence Store", version="1.0.0")
 
+
+def _load_secret_from_vault(path: str, field: str) -> Optional[str]:
+    addr = os.getenv("VAULT_ADDR")
+    token = os.getenv("VAULT_TOKEN")
+    if not addr or not token:
+        return None
+    mount = os.getenv("VAULT_KV_MOUNT", "secret")
+    url = f"{addr.rstrip('/')}/v1/{mount}/data/{path.lstrip('/')}"
+    req = urllib.request.Request(url, headers={"X-Vault-Token": token})
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+        return data.get("data", {}).get("data", {}).get(field)
+    except Exception:
+        return None
+
+
+def _load_secret(env_var: str, vault_path: str, vault_field: str, default: str) -> str:
+    return (
+        _load_secret_from_vault(vault_path, vault_field)
+        or os.getenv(env_var)
+        or default
+    )
+
+
 LEDGER_PATH = os.getenv("LEDGER_PATH", "/data/evidence.jsonl")
-HMAC_SECRET = os.getenv("EVIDENCE_HMAC_SECRET", "arhiax-evidence-secret-change-in-prod")
+HMAC_SECRET = _load_secret(
+    "EVIDENCE_HMAC_SECRET", "arhiax/evidence", "hmac",
+    "arhiax-evidence-secret-change-in-prod",
+)
 
 _sequence = 0
 _last_hash = "0" * 64

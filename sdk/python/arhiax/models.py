@@ -4,7 +4,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AutonomyLevel(str, Enum):
@@ -46,6 +46,42 @@ class Credential(BaseModel):
     permitted_tools: List[str] = []
     permitted_data_scopes: List[str] = []
     permitted_operations: List[str] = []
+    security_profile: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SecurityProfile(BaseModel):
+    token_mode: str = "brokered_ephemeral"
+    zero_token_in_context: bool = True
+    require_pop: bool = True
+    tool_token_ttl_seconds: int = 60
+    high_risk_token_ttl_seconds: int = 30
+    revocation_mode: str = "redis+jti"
+    step_up_required_for: List[str] = Field(default_factory=list)
+    allowed_audiences: List[str] = Field(default_factory=list)
+    context_binding_mode: str = "resource"
+    sanitize_tool_outputs: bool = True
+    enforce_broker_for_tools: bool = True
+    # Step-up bloqueante: cuando el gateway devuelve ESCALATE_TO_HUMAN el SDK
+    # abre un ticket HIC y espera su resolucion antes de continuar. Si se
+    # excede `hic_poll_timeout_seconds` se trata como rechazo.
+    enable_hic_step_up: bool = True
+    hic_poll_interval_seconds: float = 2.0
+    hic_poll_timeout_seconds: float = 300.0
+
+
+class EphemeralToolToken(BaseModel):
+    token: str
+    token_type: str = "DPoP"
+    expires_at: str
+    issued_at: str
+    jti: str
+    audience: str
+    scope: str
+    resource: str
+    invocation_id: str
+    context_binding: Dict[str, str] = Field(default_factory=dict)
+    proof_key_id: str = ""
+    delegated_by: str = ""
 
 
 class GovernanceDecision(BaseModel):
@@ -55,6 +91,9 @@ class GovernanceDecision(BaseModel):
     obligations: List[Dict[str, Any]] = []
     evidence_id: str = ""
     hic_ticket_id: Optional[str] = None
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
 
     @property
     def is_allowed(self) -> bool:
