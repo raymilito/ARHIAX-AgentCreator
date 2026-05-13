@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import uuid
@@ -231,7 +232,7 @@ async def _authorize_tool_token(req: ToolTokenRequest) -> None:
     expected_hmac = credential.get("parent_chain_hmac") or ""
     if not req.agent_credential_hmac or not expected_hmac:
         raise HTTPException(401, "Prueba de credencial AIM requerida")
-    if not hashlib.compare_digest(req.agent_credential_hmac, expected_hmac):
+    if not hmac.compare_digest(req.agent_credential_hmac, expected_hmac):
         raise HTTPException(401, "Prueba de credencial AIM invalida")
 
     operation = _expected_operation(req)

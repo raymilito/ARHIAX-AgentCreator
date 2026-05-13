@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ╔══════════════════════════════════════════════════════════════════════════╗
 # ║  ARHIAX AgentCreator — Stack completo de gobernanza                    ║
 # ║                                                                        ║
@@ -50,19 +48,19 @@ services:
   # OPA no soporta TLS nativo sin proxy. Queda en HTTP interno (no expuesto
   # al host) dentro de la red privada arhiax-net.
   opa:
-    image: openpolicyagent/opa:0.68.0-rootless
+    image: openpolicyagent/opa:0.68.0
     command:
       - run
       - --server
       - --addr=0.0.0.0:8181
       - --log-level=info
-      - /bundles
+      - /bundles/main.rego
     volumes:
       - ./runtime/bundles:/bundles:ro
     networks:
       - arhiax-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8181/health"]
+      test: ["CMD", "/opa", "eval", "true"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -119,7 +117,7 @@ services:
         - -c
         - >
           if [ -f /certs/evidence-store.crt ]; then
-            curl -sf --cacert /certs/ca.crt https://localhost:8090/healthz;
+            curl -sf --cacert /certs/ca.crt --cert /certs/evidence-store.crt --key /certs/evidence-store.key https://localhost:8090/healthz;
           else
             curl -sf http://localhost:8090/healthz;
           fi
@@ -166,7 +164,7 @@ services:
         - -c
         - >
           if [ -f /certs/gateway.crt ]; then
-            curl -sf --cacert /certs/ca.crt https://localhost:8080/healthz;
+            curl -sf --cacert /certs/ca.crt --cert /certs/gateway.crt --key /certs/gateway.key https://localhost:8080/healthz;
           else
             curl -sf http://localhost:8080/healthz;
           fi
@@ -199,7 +197,7 @@ services:
         - -c
         - >
           if [ -f /certs/aim-service.crt ]; then
-            curl -sf --cacert /certs/ca.crt https://localhost:8200/healthz;
+            curl -sf --cacert /certs/ca.crt --cert /certs/aim-service.crt --key /certs/aim-service.key https://localhost:8200/healthz;
           else
             curl -sf http://localhost:8200/healthz;
           fi
@@ -227,7 +225,7 @@ services:
         - -c
         - >
           if [ -f /certs/aut-service.crt ]; then
-            curl -sf --cacert /certs/ca.crt https://localhost:8201/healthz;
+            curl -sf --cacert /certs/ca.crt --cert /certs/aut-service.crt --key /certs/aut-service.key https://localhost:8201/healthz;
           else
             curl -sf http://localhost:8201/healthz;
           fi
@@ -255,7 +253,7 @@ services:
         - -c
         - >
           if [ -f /certs/bbr-service.crt ]; then
-            curl -sf --cacert /certs/ca.crt https://localhost:8202/healthz;
+            curl -sf --cacert /certs/ca.crt --cert /certs/bbr-service.crt --key /certs/bbr-service.key https://localhost:8202/healthz;
           else
             curl -sf http://localhost:8202/healthz;
           fi
@@ -284,7 +282,7 @@ services:
         - -c
         - >
           if [ -f /certs/hic-service.crt ]; then
-            curl -sf --cacert /certs/ca.crt https://localhost:8203/healthz;
+            curl -sf --cacert /certs/ca.crt --cert /certs/hic-service.crt --key /certs/hic-service.key https://localhost:8203/healthz;
           else
             curl -sf http://localhost:8203/healthz;
           fi
@@ -323,7 +321,7 @@ services:
         - -c
         - >
           if [ -f /certs/credential-broker.crt ]; then
-            curl -sf --cacert /certs/ca.crt https://localhost:8204/healthz;
+            curl -sf --cacert /certs/ca.crt --cert /certs/credential-broker.crt --key /certs/credential-broker.key https://localhost:8204/healthz;
           else
             curl -sf http://localhost:8204/healthz;
           fi
@@ -366,7 +364,7 @@ services:
         - -c
         - >
           if [ -f /certs/creator-api.crt ]; then
-            curl -sf --cacert /certs/ca.crt https://localhost:8300/healthz;
+            curl -sf --cacert /certs/ca.crt --cert /certs/creator-api.crt --key /certs/creator-api.key https://localhost:8300/healthz;
           else
             curl -sf http://localhost:8300/healthz;
           fi

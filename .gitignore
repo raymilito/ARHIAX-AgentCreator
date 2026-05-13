@@ -1,4 +1,4 @@
-# ── Entorno y secretos ────────────────────────────────────────────────────────
+# Environment and secrets
 .env
 .env.*
 !.env.example
@@ -7,17 +7,15 @@
 *.p12
 secrets/
 
-# ── Certificados TLS ──────────────────────────────────────────────────────────
-# Las claves privadas NUNCA van a git.
-# El CA público (ca.crt) puede comitearse si el equipo lo necesita para desarrollo.
+# TLS certificates generated for local deployment
+# Never commit local private keys or local development certificates.
 certs/*.key
 certs/*.csr
 certs/*.ext
 certs/*.srl
-# Descomenta la siguiente línea si NO quieres commitear ningún certificado:
-# certs/*.crt
+certs/*.crt
 
-# ── Python ────────────────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -40,7 +38,7 @@ wheels/
 *.egg
 MANIFEST
 
-# ── Virtual environments ──────────────────────────────────────────────────────
+# Virtual environments
 venv/
 .venv/
 env/
@@ -49,7 +47,7 @@ ENV/
 env.bak/
 venv.bak/
 
-# ── Tests y cobertura ─────────────────────────────────────────────────────────
+# Tests and coverage
 .pytest_cache/
 .coverage
 .coverage.*
@@ -62,17 +60,17 @@ nosetests.xml
 test-results/
 junit*.xml
 
-# ── Docker ────────────────────────────────────────────────────────────────────
+# Docker
 docker-compose.override.yml
 
-# ── Datos persistentes (volúmenes locales) ────────────────────────────────────
+# Local persistent data
 data/
 volumes/
 *.db
 *.jsonl
 !sdk/python/examples/*.jsonl
 
-# ── IDEs y editores ───────────────────────────────────────────────────────────
+# IDEs and editors
 .vscode/
 .idea/
 *.swp
@@ -81,20 +79,20 @@ volumes/
 .DS_Store
 Thumbs.db
 
-# ── Logs ─────────────────────────────────────────────────────────────────────
+# Logs
 *.log
 logs/
 
-# ── Distribución del SDK ──────────────────────────────────────────────────────
+# SDK distribution
 sdk/python/dist/
 sdk/python/build/
 sdk/python/*.egg-info/
 
-# ── Helm ─────────────────────────────────────────────────────────────────────
+# Helm
 chart/*/charts/
 chart/*/*.lock
 
-# ── Archivos temporales ───────────────────────────────────────────────────────
+# Temporary files
 *.tmp
 *.bak
 *.orig
