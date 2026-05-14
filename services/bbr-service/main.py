@@ -6,15 +6,22 @@ from __future__ import annotations
 import math
 import os
 import sqlite3
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI(title="ARHIAX BBR Service", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+app = FastAPI(title="ARHIAX BBR Service", version="1.0.0", lifespan=lifespan)
 
 DB_PATH = os.getenv("BBR_DB_PATH", "/data/bbr.db")
+MAX_LIST_LIMIT = int(os.getenv("BBR_MAX_LIST_LIMIT", "1000"))
 
 
 # ─── Modelos ────────────────────────────────────────────────────────────────
@@ -43,8 +50,15 @@ class BaselineScore(BaseModel):
 # ─── DB ─────────────────────────────────────────────────────────────────────
 
 def get_db() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    db_path = os.getenv("BBR_DB_PATH", DB_PATH)
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    if db_path != ":memory:":
+        conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -69,11 +83,6 @@ def init_db() -> None:
     conn.close()
 
 
-@app.on_event("startup")
-async def startup():
-    init_db()
-
-
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok", "service": "bbr"}
@@ -92,20 +101,20 @@ async def readyz():
 
 # ─── Registro de observación ────────────────────────────────────────────────
 
-@app.post("/v1/baseline/{agent_id}/observe", status_code=201)
+@app.post("/v1/baseline/{agent_id}/observe")
 async def record_observation(agent_id: str, obs: Observation):
     import json
     if obs.agent_id != agent_id:
         raise HTTPException(400, "agent_id no coincide")
     conn = get_db()
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     conn.execute(
         "INSERT INTO observations (agent_id,operation_type,tool_name,duration_ms,token_count,outcome,tags,observed_at) VALUES (?,?,?,?,?,?,?,?)",
         (agent_id, obs.operation_type, obs.tool_name, obs.duration_ms, obs.token_count, obs.outcome, json.dumps(obs.tags), now),
     )
     conn.commit()
     conn.close()
-    return {"recorded": True, "agent_id": agent_id}
+    return {"status": "recorded", "recorded": True, "agent_id": agent_id}
 
 
 # ─── Estadísticas de baseline ───────────────────────────────────────────────
@@ -169,6 +178,7 @@ async def compute_score(agent_id: str, req: DeviationRequest):
 
 @app.get("/v1/baseline/{agent_id}/observations")
 async def list_observations(agent_id: str, limit: int = 50):
+    limit = min(max(1, limit), MAX_LIST_LIMIT)
     conn = get_db()
     rows = conn.execute(
         "SELECT * FROM observations WHERE agent_id=? ORDER BY observed_at DESC LIMIT ?",

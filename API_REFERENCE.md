@@ -129,7 +129,20 @@ Emite token efimero por accion.
 | `requested_autonomy_level` | string | no | A0-A4 |
 | `dpop_jwk` | object | no | JWK publica EC P-256 |
 | `act_chain` | string[] | no | Cadena de delegacion |
-| `agent_credential_hmac` | string | yes | Prueba AIM |
+| `agent_credential_proof` | object | yes | Proof firmado por request contra AIM |
+| `agent_credential_hmac` | string | no | Compatibilidad legacy; no usar en produccion |
+
+`agent_credential_proof`:
+
+```json
+{
+  "nonce": "proof-...",
+  "ts": 1778688000,
+  "signature": "hex-hmac-sha256"
+}
+```
+
+La firma se calcula sobre un mensaje canonico que incluye `agent_id`, `tool_name`, `audience`, `scope`, `invocation_id`, `nonce` y `ts`.
 
 ## AIM Service `:8200`
 
@@ -145,6 +158,7 @@ La credencial incluye `security_profile`.
 
 ## AUT Service `:8201`
 
+- `POST /v1/autonomy/register`
 - `GET /v1/autonomy/{agent_id}`
 - `POST /v1/autonomy/check`
 - `POST /v1/autonomy/{agent_id}/promote`

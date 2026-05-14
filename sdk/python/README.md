@@ -14,13 +14,16 @@ Un agente hereda de `ARHIAXAgent` y marca herramientas con `@governed_tool`. El 
 
 1. Evalua politica inicial en Gateway.
 2. Resuelve HIC step-up si aplica.
-3. Solicita token efimero al Credential Broker.
-4. Genera DPoP proof.
-5. Confirma en Gateway con `ephemeralAuth`.
-6. Ejecuta la herramienta.
-7. Registra observacion en BBR.
+3. Construye `agent_credential_proof` firmado por request.
+4. Solicita token efimero al Credential Broker.
+5. Genera DPoP proof.
+6. Confirma en Gateway con `ephemeralAuth`.
+7. Ejecuta la herramienta.
+8. Registra observacion en BBR.
 
 El token no entra en el prompt ni en el contexto conversacional.
+
+El proof de agente tampoco envia el `parent_chain_hmac` crudo. El SDK firma un mensaje canonico con nonce, timestamp, agente, tool, audience, scope e invocation id.
 
 ## Ejemplo
 

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -27,11 +28,12 @@ except Exception:  # pragma: no cover — entorno sin paquete redis
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _init_jti_store()
+    await _load_halt_state()
     try:
         await _refresh_jwks(force=True)
     except Exception:
         # No bloqueamos el startup; el primer decide forzara reintento
-        pass
+        self._registry._inmem[key] = int(value)
     try:
         yield
     finally:
@@ -59,6 +61,11 @@ DPOP_HTU = os.getenv("GATEWAY_DECIDE_HTU", f"{GATEWAY_PUBLIC_URL.rstrip('/')}/v1
 DPOP_CLOCK_SKEW_SECONDS = int(os.getenv("DPOP_CLOCK_SKEW_SECONDS", "60"))
 REDIS_URL = os.getenv("ARHIAX_REDIS_URL") or os.getenv("REDIS_URL")
 REDIS_KEY_PREFIX = os.getenv("ARHIAX_REDIS_PREFIX", "arhiax:gw")
+# CNs de certificado mTLS autorizados a revocar cualquier token.
+# Separados por coma. Si vacío, solo el emisor puede revocar su propio token.
+REVOCATION_ADMIN_CNS: set = set(
+    cn.strip() for cn in os.getenv("REVOCATION_ADMIN_CNS", "").split(",") if cn.strip()
+)
 
 # CA cert para verificación TLS inter-servicio.
 # None → sin TLS (modo dev). Ruta al ca.crt → verifica con CA interna.
@@ -77,20 +84,103 @@ def _mtls_kwargs() -> Dict[str, Any]:
         kwargs["cert"] = (_CLIENT_CERT, _CLIENT_KEY)
     return kwargs
 
-# Contadores simples de métricas en memoria
-_metrics: Dict[str, int] = {
-    "decide_allow": 0, "decide_deny": 0,
-    "opa_errors": 0, "evidence_errors": 0,
-    "ephemeral_auth_denied": 0,
-    "replay_blocked": 0, "revoked_blocked": 0,
-    "jti_store_errors": 0,
-    "idempotent_hits": 0,
-    # SIEM / anomalias
-    "anomaly_jti_multi_source": 0,
-    "anomaly_aud_mismatch": 0,
-    "anomaly_dpop_failure": 0,
-    "anomaly_burst_denials": 0,
-}
+# Contadores de métricas — escalables con Redis
+class _MetricsRegistry:
+    """Registro centralizado de métricas con soporte Redis.
+
+    En producción (múltiples instancias Gateway), usa Redis.
+    En dev/tests, usa diccionario in-memory.
+    """
+
+    def __init__(self, redis_client=None):
+        self._redis = redis_client
+        self._prefix = REDIS_KEY_PREFIX + ":metrics"
+        self._inmem: Dict[str, int] = {}
+
+    async def increment(self, metric_name: str, value: int = 1) -> None:
+        """Incrementar métrica."""
+        if self._redis:
+            try:
+                key = f"{self._prefix}:{metric_name}"
+                await self._redis.incr(key, value)
+                return
+            except Exception:
+                pass  # Fallback a in-memory
+
+        # Fallback in-memory
+        self._inmem[metric_name] = self._inmem.get(metric_name, 0) + value
+
+    async def get(self, metric_name: str) -> int:
+        """Leer métrica."""
+        if self._redis:
+            try:
+                key = f"{self._prefix}:{metric_name}"
+                val = await self._redis.get(key)
+                return int(val or 0)
+            except Exception:
+                pass
+
+        return self._inmem.get(metric_name, 0)
+
+    async def get_all(self) -> Dict[str, int]:
+        """Obtener todas las métricas."""
+        if self._redis:
+            try:
+                pattern = f"{self._prefix}:*"
+                cursor = 0
+                metrics = {}
+                while True:
+                    cursor, keys = await self._redis.scan(cursor, match=pattern)
+                    for key in keys:
+                        metric_name = key.replace(f"{self._prefix}:", "")
+                        val = await self._redis.get(key)
+                        metrics[metric_name] = int(val or 0)
+                    if cursor == 0:
+                        break
+                return metrics
+            except Exception:
+                pass
+
+        return dict(self._inmem)
+
+_metrics_registry = _MetricsRegistry()
+
+# Alias para compatibilidad — acceso antiguo a través de diccionario
+class _MetricsDictCompat(dict):
+    def __init__(self, registry):
+        super().__init__()
+        self._registry = registry
+
+    def __setitem__(self, key, value):
+        # No permitir asignación directa, solo incrementos
+        self._registry._inmem[key] = int(value)
+
+    def __getitem__(self, key):
+        # Leer valor actual (bloqueante, pero acceptable para métricas)
+        return int(self._registry._inmem.get(key, 0))
+
+    def get(self, key, default=None):
+        return self._registry._inmem.get(key, default)
+
+    def keys(self):
+        return self._registry._inmem.keys()
+
+    def items(self):
+        return self._registry._inmem.items()
+
+    def clear(self):
+        self._registry._inmem.clear()
+
+_metrics = _MetricsDictCompat(_metrics_registry)
+
+def _increment_metric(metric_name: str, value: int = 1) -> None:
+    """Helper para incrementar métrica sin necesidad de async context."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_metrics_registry.increment(metric_name, value))
+    except RuntimeError:
+        _metrics_registry._inmem[metric_name] = _metrics_registry._inmem.get(metric_name, 0) + value
+
 # Tracking ligero para alertas: ip por jti (detectar mismo jti desde 2 IPs),
 # rachas de denegaciones por subject, etc. In-memory con purga implicita por
 # uso; en produccion esto va a Redis/SIEM dedicado.
@@ -98,11 +188,21 @@ _jti_origins: Dict[str, set] = {}
 _subject_recent_denies: Dict[str, List[float]] = {}
 BURST_DENY_WINDOW_SECONDS = int(os.getenv("ANOMALY_BURST_WINDOW_SECONDS", "60"))
 BURST_DENY_THRESHOLD = int(os.getenv("ANOMALY_BURST_THRESHOLD", "5"))
+MAX_JTI_ORIGINS = int(os.getenv("ANOMALY_MAX_JTI_ORIGINS", "5000"))
+MAX_SUBJECT_DENY_ENTRIES = int(os.getenv("ANOMALY_MAX_SUBJECT_DENY_ENTRIES", "2000"))
+MAX_JTI_ISSUERS = int(os.getenv("ANOMALY_MAX_JTI_ISSUERS", "5000"))
 # Cache in-memory de respuestas idempotentes (fallback cuando Redis no esta)
 _idem_cache: Dict[str, str] = {}
 # Backends in-memory — usados como fallback y por los tests
 _seen_jtis: Dict[str, int] = {}
 _revoked_jtis: Dict[str, int] = {}
+
+# C10 — Kill-switch org-wide.
+# Persiste en Redis; se restaura al arrancar. Bloquea todo /v1/decide cuando active=True.
+_halt_state: Dict[str, Any] = {
+    "active": False, "reason": "", "halted_at": "", "halted_by": "", "scope": "org",
+}
+_HALT_REDIS_KEY = f"{REDIS_KEY_PREFIX}:org:halt"
 
 
 # ─── Almacén de jti (replay + revocación) ───────────────────────────────────
@@ -122,34 +222,48 @@ class _JtiStore:
 
 
 class _InMemoryJtiStore(_JtiStore):
-    """Backend in-memory. Soporta dev y tests; no sobrevive reinicios."""
+    """Backend in-memory. Soporta dev y tests; no sobrevive reinicios.
+
+    Optimizado para O(1) purga usando deques de expiración.
+    """
 
     def __init__(self, seen: Dict[str, int], revoked: Dict[str, int]):
         self._seen = seen
         self._revoked = revoked
+        self._seen_expiry_queue = deque()  # [(expiry_ts, jti), ...]
+        self._revoked_expiry_queue = deque()
 
-    def _purge(self, now_ts: int) -> None:
-        for store in (self._seen, self._revoked):
-            expired = [k for k, exp in store.items() if exp < now_ts]
-            for k in expired:
-                store.pop(k, None)
+    def _purge_queue(self, now_ts: int, store: Dict[str, int], queue: deque) -> None:
+        """Remover items expirados del frente de la queue — O(1) amortizado."""
+        while queue and queue[0][0] < now_ts:
+            exp_ts, key = queue.popleft()
+            # Verificar que aún está en el store con ese timestamp (puede haber sido
+            # reinsertado con TTL diferente)
+            if store.get(key) == exp_ts:
+                store.pop(key, None)
 
     async def mark_seen(self, jti: str, ttl_seconds: int) -> bool:
         now_ts = int(datetime.now(timezone.utc).timestamp())
-        self._purge(now_ts)
+        self._purge_queue(now_ts, self._seen, self._seen_expiry_queue)
+
         if jti in self._seen:
             return False
-        self._seen[jti] = now_ts + max(1, ttl_seconds)
+
+        exp_ts = now_ts + max(1, ttl_seconds)
+        self._seen[jti] = exp_ts
+        self._seen_expiry_queue.append((exp_ts, jti))
         return True
 
     async def is_revoked(self, jti: str) -> bool:
         now_ts = int(datetime.now(timezone.utc).timestamp())
-        self._purge(now_ts)
+        self._purge_queue(now_ts, self._revoked, self._revoked_expiry_queue)
         return jti in self._revoked
 
     async def revoke(self, jti: str, ttl_seconds: int) -> None:
         now_ts = int(datetime.now(timezone.utc).timestamp())
-        self._revoked[jti] = now_ts + max(1, ttl_seconds)
+        exp_ts = now_ts + max(1, ttl_seconds)
+        self._revoked[jti] = exp_ts
+        self._revoked_expiry_queue.append((exp_ts, jti))
 
 
 class _RedisJtiStore(_JtiStore):
@@ -204,6 +318,12 @@ def _track_jti_origin(jti: str, source_ip: str) -> None:
     """Registra el origen de un jti. Si aparece desde 2+ IPs, emite anomalia."""
     if not jti or not source_ip:
         return
+    if len(_jti_origins) >= MAX_JTI_ORIGINS and jti not in _jti_origins:
+        # Evict arbitrary entry to prevent unbounded growth
+        try:
+            _jti_origins.pop(next(iter(_jti_origins)))
+        except StopIteration:
+            pass
     origins = _jti_origins.setdefault(jti, set())
     origins.add(source_ip)
     if len(origins) > 1:
@@ -215,14 +335,24 @@ def _track_subject_deny(subject: str) -> None:
     if not subject:
         return
     now = time.monotonic()
+    cutoff = now - BURST_DENY_WINDOW_SECONDS
     window = _subject_recent_denies.setdefault(subject, [])
     window.append(now)
-    # purga ventana
-    cutoff = now - BURST_DENY_WINDOW_SECONDS
+    # purga entradas expiradas de la ventana
     while window and window[0] < cutoff:
         window.pop(0)
+    # si la ventana quedo vacia, eliminar el subject del dict para no acumular
+    if not window:
+        _subject_recent_denies.pop(subject, None)
+        return
     if len(window) >= BURST_DENY_THRESHOLD:
         _metrics["anomaly_burst_denials"] += 1
+    # cap para evitar acumulacion ilimitada
+    if len(_subject_recent_denies) > MAX_SUBJECT_DENY_ENTRIES:
+        try:
+            _subject_recent_denies.pop(next(iter(_subject_recent_denies)))
+        except StopIteration:
+            pass
 
 
 async def _idem_get(key: str) -> Optional[str]:
@@ -263,6 +393,28 @@ async def _init_jti_store() -> None:
     except Exception:
         _metrics["jti_store_errors"] += 1
         _jti_store = _inmem_store
+
+
+async def _load_halt_state() -> None:
+    """Restaura el estado del kill-switch desde Redis al arrancar."""
+    if _redis_client is None:
+        return
+    try:
+        val = await _redis_client.get(_HALT_REDIS_KEY)
+        if val:
+            _halt_state.update(json.loads(val))
+    except Exception:
+        pass
+
+
+async def _save_halt_state() -> None:
+    """Persiste el kill-switch en Redis para sobrevivir reinicios del gateway."""
+    if _redis_client is None:
+        return
+    try:
+        await _redis_client.set(_HALT_REDIS_KEY, json.dumps(_halt_state))
+    except Exception:
+        pass
 
 
 # ─── Modelos ────────────────────────────────────────────────────────────────
@@ -336,15 +488,47 @@ async def _append_evidence(req: DecideRequest, allow: bool, reasons: List[str], 
 
 # ─── Injection detection ─────────────────────────────────────────────────────
 
-_INJECTION_PATTERNS = [
-    "ignore previous", "disregard", "system:", "<script>",
-    "javascript:", "UNION SELECT", "DROP TABLE", "{{", "${", "`",
-]
-
+import re
+import unicodedata
 
 def _has_injection(text: str) -> bool:
-    low = text.lower()
-    return any(p.lower() in low for p in _INJECTION_PATTERNS)
+    """Detección mejorada de inyecciones con normalización Unicode."""
+    # Normalizar Unicode
+    normalized = unicodedata.normalize('NFKC', text.lower())
+
+    # Patrones de inyección mejorados
+    dangerous_patterns = [
+        r"<\s*script",  # <script
+        r"on(?:load|click|error|mouse)\s*=",  # event handlers
+        r"\b(?:eval|exec|system)\s*\(",  # función calls peligrosas
+        r"(?:union|select|insert|delete|update|drop)\s+",  # SQL injection
+        r"(?:--|;)\s*(?:drop|delete)",  # SQL comments
+        r"\.\./",  # Path traversal
+        r"\.\.\\/",  # Path traversal Windows
+        r"\{\s*\$(?:ne|gt|lt|regex|where)\s*:",  # NoSQL injection
+        r"javascript\s*:",  # XSS URL scheme
+        r"\$\s*\{",  # template injection
+        r"ignore\s+previous",  # Jailbreak attempt
+        r"disregard\s+", # Jailbreak attempt
+    ]
+
+    if any(re.search(p, normalized) for p in dangerous_patterns):
+        _increment_metric("injection_detected")
+        return True
+
+    # Detectar Unicode sospechoso
+    suspicious_chars = [
+        '‮',  # Right-to-left override
+        '​',  # Zero-width space
+        '‌',  # Zero-width non-joiner
+        '‭',  # Left-to-right override
+    ]
+
+    if any(char in text for char in suspicious_chars):
+        _increment_metric("suspicious_unicode_detected")
+        return True
+
+    return False
 
 
 def _check_payload_injection(context: dict) -> bool:
@@ -367,6 +551,12 @@ def _b64url_decode(value: str) -> bytes:
 _jwks_keys: Dict[str, ec.EllipticCurvePublicKey] = {}
 _jwks_fetched_at: float = 0.0
 
+# Rastreo de emisores de jti: jti -> (client_id, emission_timestamp)
+_jti_issuers: Dict[str, tuple[str, float]] = {}
+
+import asyncio
+_jwks_refresh_lock = asyncio.Lock()
+
 
 def _public_key_from_jwk(jwk: Dict[str, Any]) -> ec.EllipticCurvePublicKey:
     if jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
@@ -380,25 +570,32 @@ async def _refresh_jwks(force: bool = False) -> None:
     global _jwks_keys, _jwks_fetched_at
     if not force and _jwks_keys and (time.monotonic() - _jwks_fetched_at) < JWKS_REFRESH_SECONDS:
         return
-    try:
-        async with httpx.AsyncClient(timeout=3.0, **_mtls_kwargs()) as client:
-            r = await client.get(BROKER_JWKS_URL)
-        if r.status_code != 200:
-            raise RuntimeError(f"JWKS HTTP {r.status_code}")
-        data = r.json()
-        new_keys: Dict[str, ec.EllipticCurvePublicKey] = {}
-        for jwk in data.get("keys", []):
-            kid = jwk.get("kid")
-            if not kid:
-                continue
-            new_keys[kid] = _public_key_from_jwk(jwk)
-        if new_keys:
-            _jwks_keys = new_keys
-            _jwks_fetched_at = time.monotonic()
-    except Exception:
-        _metrics["jti_store_errors"] += 1
-        if not _jwks_keys:
-            raise HTTPException(503, "JWKS del broker no disponible")
+
+    # Proteger contra race conditions con asyncio.Lock
+    async with _jwks_refresh_lock:
+        # Double-check después de adquirir lock
+        if not force and _jwks_keys and (time.monotonic() - _jwks_fetched_at) < JWKS_REFRESH_SECONDS:
+            return
+
+        try:
+            async with httpx.AsyncClient(timeout=3.0, **_mtls_kwargs()) as client:
+                r = await client.get(BROKER_JWKS_URL)
+            if r.status_code != 200:
+                raise RuntimeError(f"JWKS HTTP {r.status_code}")
+            data = r.json()
+            new_keys: Dict[str, ec.EllipticCurvePublicKey] = {}
+            for jwk in data.get("keys", []):
+                kid = jwk.get("kid")
+                if not kid:
+                    continue
+                new_keys[kid] = _public_key_from_jwk(jwk)
+            if new_keys:
+                _jwks_keys = new_keys
+                _jwks_fetched_at = time.monotonic()
+        except Exception as e:
+            _metrics["jwks_refresh_error"] = _metrics.get("jwks_refresh_error", 0) + 1
+            if not _jwks_keys:
+                raise HTTPException(503, "JWKS del broker no disponible")
 
 
 def _set_jwks_keys_for_tests(keys: Dict[str, ec.EllipticCurvePublicKey]) -> None:
@@ -616,6 +813,15 @@ async def readyz():
 
 @app.post("/v1/decide", response_model=DecideResponse)
 async def decide(req: DecideRequest, request: Request):
+    if _halt_state.get("active"):
+        _increment_metric("halt_blocked")
+        raise HTTPException(503, {
+            "outcome": "HALT_ACTIVE",
+            "reason": _halt_state.get("reason", ""),
+            "halted_at": _halt_state.get("halted_at", ""),
+            "halted_by": _halt_state.get("halted_by", ""),
+        })
+
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(413, "Request demasiado grande")
@@ -667,9 +873,25 @@ async def decide(req: DecideRequest, request: Request):
         raise
 
     # Tracking IP/jti para deteccion de jti compartido entre origenes
-    auth = req.context.get("ephemeralAuth") or {}
-    if auth.get("jti") and request.client:
-        _track_jti_origin(auth["jti"], request.client.host)
+    # Nota: el payload ya fue validado en _validate_ephemeral_auth
+    token = req.context.get("ephemeralAuth", {}).get("token")
+    if token:
+        try:
+            payload = await _verify_ephemeral_signature(token)
+            jti = payload.get("jti")
+            if jti and request.client:
+                _track_jti_origin(jti, request.client.host)
+                # Registrar emisor del token para auditoría de revocación
+                # evict oldest entry before inserting to cap dict size
+                if len(_jti_issuers) >= MAX_JTI_ISSUERS and jti not in _jti_issuers:
+                    try:
+                        oldest = min(_jti_issuers.items(), key=lambda kv: kv[1][1])
+                        _jti_issuers.pop(oldest[0], None)
+                    except (ValueError, StopIteration):
+                        pass
+                _jti_issuers[jti] = (payload.get("sub", "unknown"), time.time())
+        except Exception:
+            pass  # Ya fue validado antes, solo logging
 
     # Consultar OPA
     allow, reasons, obligations, outcome = await _query_opa(req)
@@ -701,22 +923,26 @@ async def decide(req: DecideRequest, request: Request):
 
 @app.get("/metrics")
 async def metrics():
+    m = await _metrics_registry.get_all()
     lines = [
         "# HELP arhiax_gateway_decide_total Total decisions",
-        f'arhiax_gateway_decide_total{{outcome="allow"}} {_metrics["decide_allow"]}',
-        f'arhiax_gateway_decide_total{{outcome="deny"}} {_metrics["decide_deny"]}',
-        f'arhiax_gateway_opa_errors_total {_metrics["opa_errors"]}',
-        f'arhiax_gateway_evidence_errors_total {_metrics["evidence_errors"]}',
-        f'arhiax_gateway_ephemeral_auth_denied_total {_metrics["ephemeral_auth_denied"]}',
-        f'arhiax_gateway_replay_blocked_total {_metrics["replay_blocked"]}',
-        f'arhiax_gateway_revoked_blocked_total {_metrics["revoked_blocked"]}',
-        f'arhiax_gateway_jti_store_errors_total {_metrics["jti_store_errors"]}',
+        f'arhiax_gateway_decide_total{{outcome="allow"}} {m.get("decide_allow", 0)}',
+        f'arhiax_gateway_decide_total{{outcome="deny"}} {m.get("decide_deny", 0)}',
+        f'arhiax_gateway_opa_errors_total {m.get("opa_errors", 0)}',
+        f'arhiax_gateway_evidence_errors_total {m.get("evidence_errors", 0)}',
+        f'arhiax_gateway_ephemeral_auth_denied_total {m.get("ephemeral_auth_denied", 0)}',
+        f'arhiax_gateway_replay_blocked_total {m.get("replay_blocked", 0)}',
+        f'arhiax_gateway_revoked_blocked_total {m.get("revoked_blocked", 0)}',
+        f'arhiax_gateway_jti_store_redis_error_total {m.get("jti_store_redis_error", 0)}',
+        f'arhiax_gateway_jwks_refresh_error_total {m.get("jwks_refresh_error", 0)}',
         f'arhiax_gateway_jti_store_backend{{backend="{"redis" if _redis_client else "memory"}"}} 1',
-        f'arhiax_gateway_idempotent_hits_total {_metrics["idempotent_hits"]}',
-        f'arhiax_gateway_anomaly_total{{kind="jti_multi_source"}} {_metrics["anomaly_jti_multi_source"]}',
-        f'arhiax_gateway_anomaly_total{{kind="aud_mismatch"}} {_metrics["anomaly_aud_mismatch"]}',
-        f'arhiax_gateway_anomaly_total{{kind="dpop_failure"}} {_metrics["anomaly_dpop_failure"]}',
-        f'arhiax_gateway_anomaly_total{{kind="burst_denials"}} {_metrics["anomaly_burst_denials"]}',
+        f'arhiax_gateway_idempotent_hits_total {m.get("idempotent_hits", 0)}',
+        f'arhiax_gateway_anomaly_total{{kind="jti_multi_source"}} {m.get("anomaly_jti_multi_source", 0)}',
+        f'arhiax_gateway_anomaly_total{{kind="aud_mismatch"}} {m.get("anomaly_aud_mismatch", 0)}',
+        f'arhiax_gateway_anomaly_total{{kind="dpop_failure"}} {m.get("anomaly_dpop_failure", 0)}',
+        f'arhiax_gateway_anomaly_total{{kind="burst_denials"}} {m.get("anomaly_burst_denials", 0)}',
+        f'arhiax_gateway_halt_blocked_total {m.get("halt_blocked", 0)}',
+        f'arhiax_gateway_org_halted{{active="{str(_halt_state.get("active", False)).lower()}"}} 1',
     ]
     from fastapi.responses import PlainTextResponse
     return PlainTextResponse("\n".join(lines), media_type="text/plain")
@@ -742,7 +968,138 @@ async def anomalies_snapshot():
     }
 
 
+async def _get_mtls_subject(request: Request) -> str:
+    """Extrae el subject del certificado mTLS del cliente.
+
+    En producción con Traefik/Envoy, el subject viene en X-Forwarded-Client-Cert.
+    Para desarrollo, puede estar vacío.
+    """
+    client_cert_header = request.headers.get("X-Forwarded-Client-Cert", "")
+    # Formato simplificado: esperamos algo como CN=agent-abc123
+    if "CN=" in client_cert_header:
+        cn = client_cert_header.split("CN=")[1].split(";")[0]
+        return cn.strip()
+    # Fallback: usar client IP como identificador
+    if request.client:
+        return f"client:{request.client.host}"
+    return "unknown"
+
+
+class HaltRequest(BaseModel):
+    reason: str
+    scope: str = "org"
+
+
+@app.post("/v1/org/halt")
+async def halt_org(req: HaltRequest, request: Request):
+    """Kill-switch org-wide (C10). Bloquea todo /v1/decide. Requiere CN de administrador."""
+    requester = await _get_mtls_subject(request)
+    is_admin = bool(REVOCATION_ADMIN_CNS) and requester in REVOCATION_ADMIN_CNS
+    if not is_admin:
+        raise HTTPException(403, "Kill-switch requiere CN de administrador en REVOCATION_ADMIN_CNS")
+
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    _halt_state.update({
+        "active": True,
+        "reason": req.reason,
+        "halted_at": now,
+        "halted_by": requester,
+        "scope": req.scope,
+    })
+    await _save_halt_state()
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0, **_mtls_kwargs()) as client:
+            await client.post(f"{EVIDENCE_URL}/v1/records", json={
+                "service": "gateway",
+                "agent_id": requester,
+                "operation": "ORG_HALTED",
+                "timestamp": now,
+                "details": {"reason": req.reason, "scope": req.scope},
+            })
+    except Exception:
+        _increment_metric("evidence_errors")
+
+    return {"halted": True, "reason": req.reason, "halted_at": now, "halted_by": requester}
+
+
+@app.post("/v1/org/resume")
+async def resume_org(request: Request):
+    """Desactiva el kill-switch. Requiere CN de administrador."""
+    requester = await _get_mtls_subject(request)
+    is_admin = bool(REVOCATION_ADMIN_CNS) and requester in REVOCATION_ADMIN_CNS
+    if not is_admin:
+        raise HTTPException(403, "Kill-switch requiere CN de administrador en REVOCATION_ADMIN_CNS")
+
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    _halt_state.update({
+        "active": False, "reason": "", "halted_at": "", "halted_by": "", "scope": "org",
+    })
+    await _save_halt_state()
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0, **_mtls_kwargs()) as client:
+            await client.post(f"{EVIDENCE_URL}/v1/records", json={
+                "service": "gateway",
+                "agent_id": requester,
+                "operation": "ORG_RESUMED",
+                "timestamp": now,
+                "details": {"resumed_by": requester},
+            })
+    except Exception:
+        _increment_metric("evidence_errors")
+
+    return {"halted": False, "resumed_at": now, "resumed_by": requester}
+
+
+@app.get("/v1/org/status")
+async def org_status():
+    """Estado actual del kill-switch y contadores de métricas relevantes."""
+    return {
+        "kill_switch": _halt_state,
+        "service": "gateway",
+        "jti_backend": "redis" if _redis_client else "memory",
+    }
+
+
 @app.post("/v1/ephemeral/revoke/{jti}")
-async def revoke_ephemeral_jti(jti: str, ttl_seconds: int = REPLAY_WINDOW_SECONDS):
+async def revoke_ephemeral_jti(jti: str, request: Request, ttl_seconds: int = REPLAY_WINDOW_SECONDS):
+    """Revocar un token efímero. Solo el emisor o un admin puede revocarlo.
+
+    CRITICAL: Esta ruta requiere autenticación mTLS del cliente.
+    """
+    requester = await _get_mtls_subject(request)
+
+    # Validar que es autorizado a revocar este jti
+    issuer_info = _jti_issuers.get(jti)
+    is_admin = bool(REVOCATION_ADMIN_CNS) and requester in REVOCATION_ADMIN_CNS
+
+    if issuer_info:
+        issuer_id, issued_at = issuer_info
+        if not is_admin and requester != issuer_id:
+            _metrics["revocation_unauthorized"] = _metrics.get("revocation_unauthorized", 0) + 1
+            raise HTTPException(
+                403,
+                f"Not authorized to revoke token. Issuer: {issuer_id}, Requester: {requester}"
+            )
+
+    # Log en Evidence Store (fail-open: si falla, revocamos de todas formas)
+    try:
+        async with httpx.AsyncClient(timeout=3.0, **_mtls_kwargs()) as client:
+            await client.post(
+                f"{EVIDENCE_URL}/v1/records",
+                json={
+                    "service": "gateway",
+                    "agent_id": requester,
+                    "operation": "TOKEN_REVOKED",
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "details": {"jti": jti, "revoked_by": requester},
+                }
+            )
+    except Exception:
+        _metrics["evidence_errors"] += 1
+
     await _jti_store.revoke(jti, ttl_seconds)
-    return {"revoked": True, "jti": jti}
+    _metrics["token_revoked"] = _metrics.get("token_revoked", 0) + 1
+
+    return {"revoked": True, "jti": jti, "revoked_by": requester}

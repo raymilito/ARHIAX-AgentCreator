@@ -98,6 +98,7 @@ services:
     ports:
       - "8090:8090"
     environment:
+      ARHIAX_PRODUCTION: ${ARHIAX_PRODUCTION:-false}
       LEDGER_PATH: /data/evidence.jsonl
       EVIDENCE_HMAC_SECRET: ${EVIDENCE_HMAC_SECRET:-arhiax-evidence-secret-CHANGE-ME}
       # Vault opcional — si VAULT_ADDR + VAULT_TOKEN estan definidos en el
@@ -180,6 +181,7 @@ services:
     ports:
       - "8200:8200"
     environment:
+      ARHIAX_PRODUCTION: ${ARHIAX_PRODUCTION:-false}
       AIM_HMAC_SECRET: ${AIM_HMAC_SECRET:-arhiax-aim-secret-CHANGE-ME}
       AIM_DB_PATH: /data/aim.db
       # Vault opcional — leera arhiax/aim#hmac si VAULT_ADDR+TOKEN existen.
@@ -300,6 +302,8 @@ services:
     environment:
       BROKER_DEFAULT_TTL_SECONDS: "60"
       BROKER_MAX_TTL_SECONDS: "300"
+      BROKER_REQUIRE_SIGNED_AGENT_PROOF: ${BROKER_REQUIRE_SIGNED_AGENT_PROOF:-true}
+      BROKER_AGENT_PROOF_MAX_SKEW_SECONDS: ${BROKER_AGENT_PROOF_MAX_SKEW_SECONDS:-60}
       BROKER_SIGNING_KEY_PATH: /data/broker_signing_key.pem
       BROKER_PERSIST_KEY: "true"
       AIM_URL: https://aim-service:8200

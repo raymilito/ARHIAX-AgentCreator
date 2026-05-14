@@ -2,7 +2,7 @@
 import os
 import sys
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from unittest.mock import patch, AsyncMock
 
@@ -165,7 +165,7 @@ def test_sla_expired_check(client, tmp_path):
 
     # Retroceder el SLA artificialmente en la DB
     conn = sqlite3.connect(db_path)
-    past = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
     conn.execute("UPDATE tickets SET sla_deadline=? WHERE ticket_id=?", (past, ticket_id))
     conn.commit()
     conn.close()

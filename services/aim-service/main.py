@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 import urllib.request
 import urllib.error
+import httpx
 
 
 @asynccontextmanager
@@ -62,7 +63,23 @@ def _load_secret(env_var: str, vault_path: str, vault_field: str, default: str) 
 HMAC_SECRET = _load_secret(
     "AIM_HMAC_SECRET", "arhiax/aim", "hmac", "arhiax-dev-secret-change-in-prod"
 )
+if os.getenv("ARHIAX_PRODUCTION", "false").lower() in {"1", "true", "yes"}:
+    if not HMAC_SECRET or len(HMAC_SECRET) < 32:
+        raise RuntimeError("AIM_HMAC_SECRET seguro o Vault son obligatorios en produccion")
+    if "change-in-prod" in HMAC_SECRET.lower() or "change-me" in HMAC_SECRET.lower() or "dev" in HMAC_SECRET.lower():
+        raise RuntimeError("AIM_HMAC_SECRET seguro o Vault son obligatorios en produccion")
 DB_PATH = os.getenv("AIM_DB_PATH", "/data/aim.db")
+EVIDENCE_STORE_URL = os.getenv("AIM_EVIDENCE_STORE_URL", "http://evidence-store:8090")
+_CA_CERT = os.getenv("ARHIAX_CA_CERT") or False
+_CLIENT_CERT = os.getenv("ARHIAX_TLS_CLIENT_CERT")
+_CLIENT_KEY = os.getenv("ARHIAX_TLS_CLIENT_KEY")
+
+
+def _mtls_kwargs() -> dict:
+    kwargs = {"verify": _CA_CERT}
+    if _CLIENT_CERT and _CLIENT_KEY:
+        kwargs["cert"] = (_CLIENT_CERT, _CLIENT_KEY)
+    return kwargs
 
 
 def _utc_now() -> datetime:
@@ -119,7 +136,11 @@ def get_db() -> sqlite3.Connection:
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    if db_path != ":memory:":
+        conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -167,6 +188,49 @@ def init_db() -> None:
 def _chain_hmac(agent_id: str, supervisor_id: str, issued_at: str) -> str:
     msg = f"{agent_id}:{supervisor_id}:{issued_at}".encode()
     return hmac.new(HMAC_SECRET.encode(), msg, hashlib.sha256).hexdigest()
+
+
+def _verify_parent_chain_hmac(agent_id: str, supervisor_id: str, issued_at: str, stored_hmac: str) -> bool:
+    expected = _chain_hmac(agent_id, supervisor_id, issued_at)
+    return hmac.compare_digest(expected, stored_hmac)
+
+
+def _parse_rotation_deadline(credential_expires_at: str) -> Optional[datetime]:
+    try:
+        if credential_expires_at.endswith('Z'):
+            return datetime.fromisoformat(credential_expires_at.replace('Z', '+00:00'))
+        return datetime.fromisoformat(credential_expires_at)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _check_rotation_needed(credential_expires_at: str) -> bool:
+    expires = _parse_rotation_deadline(credential_expires_at)
+    if not expires:
+        return False
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    days_until_expiry = (expires - now).days
+    return days_until_expiry <= 7
+
+
+async def _log_to_evidence_store(agent_id: str, operation: str, details: dict) -> None:
+    try:
+        payload = {
+            "service": "aim-service",
+            "agent_id": agent_id,
+            "operation": operation,
+            "timestamp": _utc_iso(_utc_now()),
+            "details": details,
+        }
+        async with httpx.AsyncClient(timeout=2.0, **_mtls_kwargs()) as client:
+            await client.post(
+                f"{EVIDENCE_STORE_URL.rstrip('/')}/v1/records",
+                json=payload,
+            )
+    except Exception:
+        pass
 
 
 def _row_to_credential(row: sqlite3.Row) -> Credential:
@@ -238,6 +302,13 @@ async def register_agent(reg: AgentRegistration):
     conn.commit()
     conn.close()
 
+    await _log_to_evidence_store(agent_id, "CREDENTIAL_REGISTERED", {
+        "name": reg.name,
+        "supervisor_id": reg.supervisor_id,
+        "autonomy_level": "A0",
+        "rotation_days": reg.rotation_days,
+    })
+
     return Credential(
         agent_id=agent_id, name=reg.name,
         supervisor_id=reg.supervisor_id, department_id=reg.department_id,
@@ -261,6 +332,8 @@ async def get_credential(agent_id: str):
     conn.close()
     if not row:
         raise HTTPException(404, f"Agente {agent_id} no encontrado")
+    if not _verify_parent_chain_hmac(row["agent_id"], row["supervisor_id"], row["credential_issued_at"], row["parent_chain_hmac"]):
+        raise HTTPException(500, "Parent chain HMAC verification failed")
     return _row_to_credential(row)
 
 
@@ -285,7 +358,12 @@ async def rotate_credential(agent_id: str):
         raise HTTPException(404)
     now = _utc_now()
     issued = _utc_iso(now)
-    expires = _utc_iso(now + timedelta(days=90))
+    rotation_policy = row["rotation_policy"] or "90d"
+    try:
+        rotation_days = int(rotation_policy.rstrip("d"))
+    except (ValueError, AttributeError):
+        rotation_days = 90
+    expires = _utc_iso(now + timedelta(days=rotation_days))
     new_hmac = _chain_hmac(agent_id, row["supervisor_id"], issued)
     conn.execute(
         "UPDATE agents SET credential_issued_at=?, credential_expires_at=?, parent_chain_hmac=?, lifecycle_state='ACTIVE' WHERE agent_id=?",
@@ -294,6 +372,12 @@ async def rotate_credential(agent_id: str):
     conn.commit()
     row = conn.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
     conn.close()
+
+    await _log_to_evidence_store(agent_id, "CREDENTIAL_ROTATED", {
+        "issued_at": issued,
+        "expires_at": expires,
+    })
+
     return _row_to_credential(row)
 
 
@@ -308,6 +392,9 @@ async def revoke_credential(agent_id: str):
     conn.commit()
     row = conn.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
     conn.close()
+
+    await _log_to_evidence_store(agent_id, "CREDENTIAL_REVOKED", {})
+
     return _row_to_credential(row)
 
 
@@ -331,6 +418,13 @@ async def update_autonomy(agent_id: str, update: AutonomyUpdate):
     conn.commit()
     row = conn.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
     conn.close()
+
+    await _log_to_evidence_store(agent_id, "AUTONOMY_UPDATED", {
+        "old_level": old_level,
+        "new_level": update.autonomy_level,
+        "reason": update.reason,
+    })
+
     return _row_to_credential(row)
 
 

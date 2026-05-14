@@ -36,6 +36,10 @@ AIM_URL = os.getenv("AIM_URL", "http://aim-service:8200")
 _CA_CERT = os.getenv("ARHIAX_CA_CERT") or False
 _CLIENT_CERT = os.getenv("ARHIAX_TLS_CLIENT_CERT")
 _CLIENT_KEY = os.getenv("ARHIAX_TLS_CLIENT_KEY")
+REQUIRE_SIGNED_AGENT_PROOF = os.getenv(
+    "BROKER_REQUIRE_SIGNED_AGENT_PROOF", "false"
+).lower() in {"1", "true", "yes"}
+AGENT_PROOF_MAX_SKEW_SECONDS = int(os.getenv("BROKER_AGENT_PROOF_MAX_SKEW_SECONDS", "60"))
 
 
 def _mtls_kwargs() -> dict:
@@ -65,6 +69,9 @@ class ToolTokenRequest(BaseModel):
     act_chain: Optional[list[str]] = None
     # Prueba de posesion de la credencial AIM del agente. No se serializa al JWT.
     agent_credential_hmac: Optional[str] = None
+    # Prueba firmada por request. Evita transportar el parent_chain_hmac crudo.
+    # signature = HMAC-SHA256(parent_chain_hmac, canonical_request)
+    agent_credential_proof: Optional[Dict[str, str]] = None
 
 
 class ToolTokenResponse(BaseModel):
@@ -142,17 +149,47 @@ def _compute_kid(pub: ec.EllipticCurvePublicKey) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def _validate_p256_coordinate(coord_b64u: str) -> bool:
+    """Valida que una coordenada P-256 (x o y) este dentro del rango valido.
+
+    P-256 field prime: p = 2^256 - 2^224 + 2^192 + 2^128 - 1
+    Las coordenadas deben estar en el rango [0, p).
+    """
+    try:
+        # Decodifica base64url; agrega padding si es necesario
+        padding = 4 - (len(coord_b64u) % 4)
+        padded = coord_b64u + ("=" * padding if padding < 4 else "")
+        coord_bytes = base64.urlsafe_b64decode(padded)
+        if len(coord_bytes) != 32:
+            return False
+        coord = int.from_bytes(coord_bytes, "big")
+        # P-256 field prime
+        p = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff
+        return 0 <= coord < p
+    except (ValueError, Exception):
+        return False
+
+
 def _jwk_thumbprint(jwk: Dict[str, str]) -> str:
     """SHA-256 thumbprint RFC 7638 b64url de la JWK publica del cliente."""
     required = sorted({"crv", "kty", "x", "y"}.intersection(jwk.keys()))
     if set(required) != {"crv", "kty", "x", "y"}:
         raise HTTPException(400, "JWK incompleta para thumbprint DPoP")
+    if jwk.get("crv") != "P-256":
+        raise HTTPException(400, "Solo P-256 soportado para DPoP")
+    if not _validate_p256_coordinate(jwk["x"]):
+        raise HTTPException(400, "Coordenada x de P-256 invalida")
+    if not _validate_p256_coordinate(jwk["y"]):
+        raise HTTPException(400, "Coordenada y de P-256 invalida")
     canonical = {k: jwk[k] for k in ("crv", "kty", "x", "y")}
     raw = json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode()
     return _b64u(hashlib.sha256(raw).digest())
 
 
 _KID = _compute_kid(_PUBLIC_KEY)
+_proof_nonces: Dict[str, int] = {}
+MAX_NONCE_CACHE_SIZE = int(os.getenv("BROKER_MAX_NONCE_CACHE_SIZE", "10000"))
+NONCE_TTL_SECONDS = int(os.getenv("BROKER_NONCE_TTL_SECONDS", "120"))
 
 
 def _public_jwk() -> dict:
@@ -177,6 +214,64 @@ def _sign_es256(unsigned: bytes) -> bytes:
     der = _PRIVATE_KEY.sign(unsigned, ec.ECDSA(hashes.SHA256()))
     r, s = decode_dss_signature(der)
     return r.to_bytes(32, "big") + s.to_bytes(32, "big")
+
+
+def _canonical_agent_proof_message(req: ToolTokenRequest, nonce: str, issued_at: str) -> str:
+    binding = json.dumps(req.context_binding, separators=(",", ":"), sort_keys=True)
+    return "|".join([
+        req.agent_id,
+        req.tool_name,
+        req.audience,
+        req.scope,
+        req.invocation_id,
+        str(req.ttl_seconds),
+        req.requested_autonomy_level,
+        binding,
+        nonce,
+        issued_at,
+    ])
+
+
+def _cleanup_proof_nonces(now_ts: int) -> None:
+    """Limpia nonces expirados y aplica LRU si se excede el tamano maximo."""
+    expired = [nonce for nonce, exp in _proof_nonces.items() if exp <= now_ts]
+    for nonce in expired:
+        _proof_nonces.pop(nonce, None)
+    if len(_proof_nonces) > MAX_NONCE_CACHE_SIZE:
+        oldest = min(_proof_nonces.items(), key=lambda x: x[1])
+        _proof_nonces.pop(oldest[0], None)
+
+
+def _validate_signed_agent_proof(req: ToolTokenRequest, expected_hmac: str) -> bool:
+    proof = req.agent_credential_proof or {}
+    nonce = proof.get("nonce", "")
+    issued_at_raw = proof.get("issued_at", "")
+    signature = proof.get("signature", "")
+    if not nonce or not issued_at_raw or not signature:
+        return False
+
+    try:
+        issued_at = int(issued_at_raw)
+    except ValueError:
+        return False
+    now_ts = int(_utc_now().timestamp())
+    if abs(now_ts - issued_at) > AGENT_PROOF_MAX_SKEW_SECONDS:
+        return False
+
+    _cleanup_proof_nonces(now_ts)
+    nonce_key = f"{req.agent_id}:{nonce}"
+    if nonce_key in _proof_nonces:
+        raise HTTPException(409, "Prueba de credencial AIM reutilizada")
+
+    message = _canonical_agent_proof_message(req, nonce, issued_at_raw)
+    expected_signature = hmac.new(
+        expected_hmac.encode(), message.encode(), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected_signature):
+        return False
+
+    _proof_nonces[nonce_key] = now_ts + NONCE_TTL_SECONDS
+    return True
 
 
 # ─── Emision ────────────────────────────────────────────────────────────────
@@ -230,10 +325,17 @@ async def _authorize_tool_token(req: ToolTokenRequest) -> None:
         raise HTTPException(403, "Credencial AIM no esta activa")
 
     expected_hmac = credential.get("parent_chain_hmac") or ""
-    if not req.agent_credential_hmac or not expected_hmac:
+    if not expected_hmac:
         raise HTTPException(401, "Prueba de credencial AIM requerida")
-    if not hmac.compare_digest(req.agent_credential_hmac, expected_hmac):
-        raise HTTPException(401, "Prueba de credencial AIM invalida")
+
+    signed_ok = _validate_signed_agent_proof(req, expected_hmac)
+    if not signed_ok:
+        if REQUIRE_SIGNED_AGENT_PROOF:
+            raise HTTPException(401, "Prueba firmada de credencial AIM requerida")
+        if not req.agent_credential_hmac:
+            raise HTTPException(401, "Prueba de credencial AIM requerida")
+        if not hmac.compare_digest(req.agent_credential_hmac, expected_hmac):
+            raise HTTPException(401, "Prueba de credencial AIM invalida")
 
     operation = _expected_operation(req)
     permitted_operations = credential.get("permitted_operations") or []

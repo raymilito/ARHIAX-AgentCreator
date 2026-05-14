@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.key
 *.pem
 *.p12
@@ -96,3 +97,4 @@ chart/*/*.lock
 *.tmp
 *.bak
 *.orig
+~$*.docx

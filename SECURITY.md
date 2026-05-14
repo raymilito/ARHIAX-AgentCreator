@@ -9,7 +9,7 @@ ARHIAX AgentCreator implementa defensa en profundidad para agentes IA. La versio
 - Cada agente tiene una credencial emitida por AIM.
 - La credencial incluye `agent_id`, supervisor, departamento, boundary, autonomia, lifecycle, herramientas, operaciones y `security_profile`.
 - `lifecycle_state` controla operacion: solo `ACTIVE` y `ROTATING` pueden operar.
-- `parent_chain_hmac` funciona como prueba de posesion de credencial frente al Credential Broker.
+- `parent_chain_hmac` es el material de verificacion de AIM; en produccion no debe viajar como prueba cruda.
 - Los secretos HMAC se cargan desde Vault si esta disponible, con fallback a variables de entorno.
 
 ### Capa 2 - Credential Broker
@@ -18,7 +18,7 @@ ARHIAX AgentCreator implementa defensa en profundidad para agentes IA. La versio
 - Antes de emitir consulta AIM y valida:
 - `agent_id` registrado.
 - lifecycle permitido.
-- `agent_credential_hmac` correcto.
+- `agent_credential_proof` correcto: HMAC canonico firmado por request con nonce, timestamp, `agent_id`, `tool_name`, `audience`, `scope` e `invocation_id`.
 - operacion autorizada (`toolCall` o `interAgentCall`).
 - herramienta o agente destino autorizado.
 - `scope` y `audience` alineados con la accion solicitada.
@@ -103,12 +103,16 @@ Claims principales del token:
 | `ARHIAX_TLS_CLIENT_CERT` | Certificado cliente mTLS |
 | `ARHIAX_TLS_CLIENT_KEY` | Llave cliente mTLS |
 | `GATEWAY_PUBLIC_URL` | URL usada como `htu` DPoP |
+| `BROKER_REQUIRE_SIGNED_AGENT_PROOF` | Obliga proof firmado y deshabilita HMAC legacy |
+| `BROKER_AGENT_PROOF_MAX_SKEW_SECONDS` | Ventana maxima de reloj para proof firmado |
 
 ## Checklist pre-produccion
 
 - [ ] Generar certificados con `scripts/generate-certs.sh`.
 - [ ] Reemplazar `AIM_HMAC_SECRET` y `EVIDENCE_HMAC_SECRET`.
 - [ ] Montar volumen persistente para `/data/broker_signing_key.pem`.
+- [ ] Definir `BROKER_REQUIRE_SIGNED_AGENT_PROOF=true`.
+- [ ] Usar Vault o secret manager para `AIM_HMAC_SECRET` y `EVIDENCE_HMAC_SECRET`; fallback env var solo para dev.
 - [ ] Habilitar Redis persistente para `jti`.
 - [ ] Validar `BROKER_JWKS_URL` desde Gateway.
 - [ ] Validar `AIM_URL` desde Credential Broker por mTLS.
@@ -118,6 +122,13 @@ Claims principales del token:
 - [ ] Prohibir tokens en prompts/logs por politica de desarrollo.
 - [ ] Probar replay: reutilizar un `jti` debe devolver `409`.
 - [ ] Probar DPoP: token sin proof debe devolver `401`.
+- [ ] Probar proof firmado: nonce repetido debe devolver `401`.
+
+## Concurrencia Y Persistencia
+
+- SQLite opera en modo WAL y `busy_timeout=30000` para desarrollo, demo y despliegues ligeros.
+- Para cientos de decisiones por segundo, migrar AIM, AUT, BBR, HIC y Evidence Store a PostgreSQL o almacenamiento administrado.
+- Evidence Store toma `LEDGER_PATH` en runtime y reinicia indice/secuencia desde el ledger activo en startup.
 
 ## Reporte de vulnerabilidades
 

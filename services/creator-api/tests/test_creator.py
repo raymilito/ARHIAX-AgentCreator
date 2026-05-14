@@ -113,7 +113,9 @@ def test_create_agent_ok(client):
     assert data["autonomy_level"] == "A0"
     assert data["status"] == "READY"
     assert "bootstrap_code" in data
+    assert "bootstrap_config" in data
     assert "agent-abc123" in data["bootstrap_code"]
+    assert data["bootstrap_config"]["agent_id"] == "agent-abc123"
     assert data["security_profile"]["token_mode"] == "brokered_ephemeral"
     assert data["credential"]["security_profile"]["enforce_broker_for_tools"] is True
 
@@ -124,6 +126,24 @@ def test_create_agent_bootstrap_contains_gateway(client):
         data = client.post("/v1/agents/create", json=AGENT_SPEC).json()
     assert "gateway_url" in data["bootstrap_code"] or "gateway" in data["bootstrap_code"].lower()
     assert "credential_broker_url" in data["bootstrap_code"]
+
+
+def test_create_agent_bootstrap_uses_safe_literals(client):
+    async def fake_post(url, data):
+        if url.endswith("/v1/autonomy/register"):
+            return copy.deepcopy(MOCK_AUTONOMY)
+        credential = copy.deepcopy(MOCK_CREDENTIAL)
+        credential["name"] = data["name"]
+        return credential
+
+    async def fake_get(url):
+        return copy.deepcopy(MOCK_AUTONOMY)
+
+    malicious = "AgenteMalicioso'; import os; os.system('x') #"
+    with patch("main._post", fake_post), patch("main._get", fake_get):
+        data = client.post("/v1/agents/create", json={**AGENT_SPEC, "name": malicious}).json()
+    assert data["bootstrap_config"]["credential"]["name"].startswith("AgenteMalicioso")
+    compile(data["bootstrap_code"], "<bootstrap>", "exec")
 
 
 def test_create_agent_allows_security_profile_override(client):

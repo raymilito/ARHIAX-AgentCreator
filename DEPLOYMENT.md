@@ -31,6 +31,29 @@ curl http://localhost:8204/readyz   # credential-broker
 curl http://localhost:8090/readyz   # evidence-store
 ```
 
+## Despliegue productivo
+
+El codigo no requiere cambios para produccion. Lo pendiente se coloca al momento de desplegar mediante `.env`, secretos y certificados.
+
+```bash
+cp .env.production.example .env
+# Reemplazar REQUIRED_AT_DEPLOY_* por secretos reales o configurar Vault.
+bash scripts/generate-certs.sh
+docker compose config --quiet
+docker compose up -d
+```
+
+Variables minimas obligatorias:
+
+| Variable | Requisito |
+| --- | --- |
+| `ARHIAX_PRODUCTION` | `true` |
+| `AIM_HMAC_SECRET` | secreto real o Vault `arhiax/aim#hmac` |
+| `EVIDENCE_HMAC_SECRET` | secreto real o Vault `arhiax/evidence#hmac` |
+| `BROKER_REQUIRE_SIGNED_AGENT_PROOF` | `true` |
+| `GATEWAY_PUBLIC_URL` | URL que coincide con DPoP `htu` |
+| `ARHIAX_REDIS_URL` | Redis persistente |
+
 ## Capa de tokens efimeros
 
 La version actual incluye:
@@ -55,6 +78,8 @@ GATEWAY_PUBLIC_URL=https://gateway:8080
 AIM_URL=https://aim-service:8200
 BROKER_SIGNING_KEY_PATH=/data/broker_signing_key.pem
 BROKER_PERSIST_KEY=true
+BROKER_REQUIRE_SIGNED_AGENT_PROOF=true
+BROKER_AGENT_PROOF_MAX_SKEW_SECONDS=60
 ```
 
 Checks post-deploy:
@@ -143,9 +168,15 @@ Si `valid` es `false`, detener cambios operativos y abrir investigacion forense.
 
 - Validar `AIM_URL`.
 - Confirmar que el agente esta `ACTIVE` o `ROTATING`.
-- Confirmar que `agent_credential_hmac` coincide con AIM.
+- Confirmar que `agent_credential_proof` esta firmado con nonce/timestamp vigentes.
 - Confirmar que tool/scope/audience estan permitidos.
 
 ### Replay detectado
 
 Es comportamiento esperado si se reutiliza el mismo token. Emitir un token nuevo para cada tool call.
+
+### Alta concurrencia
+
+- SQLite esta configurado con WAL y `busy_timeout` para despliegue ligero.
+- Si el entorno supera decenas/cientos de escrituras por segundo, mover AIM, AUT, BBR, HIC y Evidence Store a PostgreSQL o backend administrado.
+- Mantener Redis persistente para `jti`, idempotencia y kill-switch.

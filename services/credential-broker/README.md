@@ -20,7 +20,8 @@ El endpoint `POST /v1/tokens/tool` consulta AIM y valida:
 
 - agente existente.
 - `lifecycle_state` en `ACTIVE` o `ROTATING`.
-- `agent_credential_hmac` coincide con `parent_chain_hmac`.
+- `agent_credential_proof` esta firmado por request contra `parent_chain_hmac`.
+- nonce no reutilizado y timestamp dentro de ventana.
 - operacion permitida.
 - tool permitida.
 - `scope` y `audience` coinciden con la accion.
@@ -54,6 +55,8 @@ AIM_URL=https://aim-service:8200
 ARHIAX_CA_CERT=/certs/ca.crt
 ARHIAX_TLS_CLIENT_CERT=/certs/credential-broker.crt
 ARHIAX_TLS_CLIENT_KEY=/certs/credential-broker.key
+BROKER_REQUIRE_SIGNED_AGENT_PROOF=true
+BROKER_AGENT_PROOF_MAX_SKEW_SECONDS=60
 ```
 
 ## Seguridad
@@ -61,5 +64,6 @@ ARHIAX_TLS_CLIENT_KEY=/certs/credential-broker.key
 - Firma ES256 con EC P-256.
 - Clave privada persistente en volumen `broker-keys`.
 - No acepta emision sin prueba AIM.
+- No acepta HMAC crudo como prueba primaria cuando `BROKER_REQUIRE_SIGNED_AGENT_PROOF=true`.
 - No acepta scopes genericos.
 - No expone secretos simetricos.

@@ -7,13 +7,19 @@ import json
 import os
 import sqlite3
 import uuid
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI(title="ARHIAX AUT Service", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+app = FastAPI(title="ARHIAX AUT Service", version="1.0.0", lifespan=lifespan)
 
 DB_PATH = os.getenv("AUT_DB_PATH", "/data/aut.db")
 
@@ -62,11 +68,22 @@ class ActionCheckResponse(BaseModel):
     effective_level: str
 
 
+class AutonomyRegisterRequest(BaseModel):
+    agent_id: str
+
+
 # ─── DB ─────────────────────────────────────────────────────────────────────
 
 def get_db() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    db_path = os.getenv("AUT_DB_PATH", DB_PATH)
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    if db_path != ":memory:":
+        conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -101,7 +118,7 @@ def init_db() -> None:
 def _get_or_init(agent_id: str, conn: sqlite3.Connection) -> sqlite3.Row:
     row = conn.execute("SELECT * FROM autonomy_registry WHERE agent_id=?", (agent_id,)).fetchone()
     if not row:
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         conn.execute(
             "INSERT INTO autonomy_registry VALUES (?,?,?,?)",
             (agent_id, "A0", now, now),
@@ -111,12 +128,14 @@ def _get_or_init(agent_id: str, conn: sqlite3.Connection) -> sqlite3.Row:
     return row
 
 
+def _get_registered(agent_id: str, conn: sqlite3.Connection) -> sqlite3.Row:
+    row = conn.execute("SELECT * FROM autonomy_registry WHERE agent_id=?", (agent_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Agente no registrado en AUT")
+    return row
+
+
 # ─── Lifecycle ──────────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def startup():
-    init_db()
-
 
 @app.get("/healthz")
 async def healthz():
@@ -139,10 +158,25 @@ async def readyz():
 @app.get("/v1/autonomy/{agent_id}")
 async def get_autonomy(agent_id: str):
     conn = get_db()
-    row = _get_or_init(agent_id, conn)
+    try:
+        row = _get_registered(agent_id, conn)
+        return {
+            "agent_id": agent_id,
+            "current_level": row["current_level"],
+            "sigma_threshold": SIGMA_THRESHOLDS[row["current_level"]],
+            "effective_since": row["effective_since"],
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/v1/autonomy/register", status_code=201)
+async def register_autonomy(req: AutonomyRegisterRequest):
+    conn = get_db()
+    row = _get_or_init(req.agent_id, conn)
     conn.close()
     return {
-        "agent_id": agent_id,
+        "agent_id": req.agent_id,
         "current_level": row["current_level"],
         "sigma_threshold": SIGMA_THRESHOLDS[row["current_level"]],
         "effective_since": row["effective_since"],
@@ -179,7 +213,11 @@ async def promote(agent_id: str, req: PromotionRequest):
         raise HTTPException(400, f"Nivel objetivo inválido: {req.target_level}")
 
     conn = get_db()
-    row = _get_or_init(agent_id, conn)
+    try:
+        row = _get_registered(agent_id, conn)
+    except HTTPException:
+        conn.close()
+        raise
     current = row["current_level"]
     current_idx = LEVEL_ORDER.index(current)
     target_idx = LEVEL_ORDER.index(req.target_level)
@@ -201,14 +239,14 @@ async def promote(agent_id: str, req: PromotionRequest):
             "gate_descriptions": {g: REQUIRED_GATES[g] for g in failed_gates},
         }
 
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     conn.execute(
         "UPDATE autonomy_registry SET current_level=?, effective_since=?, updated_at=? WHERE agent_id=?",
         (req.target_level, now, now, agent_id),
     )
     conn.execute(
         "INSERT INTO autonomy_events (agent_id,event_type,old_level,new_level,reason,gates_json,created_at) VALUES (?,?,?,?,?,?,?)",
-        (agent_id, "PROMOTION", current, req.target_level, req.justification, json.dumps(req.gates), now),
+        (agent_id, "PROMOTE", current, req.target_level, req.justification, json.dumps(req.gates), now),
     )
     conn.commit()
     conn.close()
@@ -220,23 +258,35 @@ async def promote(agent_id: str, req: PromotionRequest):
 @app.post("/v1/autonomy/{agent_id}/degrade")
 async def degrade(agent_id: str, req: DegradationRequest):
     conn = get_db()
-    row = _get_or_init(agent_id, conn)
+    try:
+        row = _get_registered(agent_id, conn)
+    except HTTPException:
+        conn.close()
+        raise
     current = row["current_level"]
     current_idx = LEVEL_ORDER.index(current)
+    if current_idx == 0:
+        conn.close()
+        return {
+            "degraded": False,
+            "old_level": current,
+            "new_level": current,
+            "reason": "El agente ya esta en A0 (minimo)",
+        }
 
     if current_idx == 0:
         conn.close()
         return {"degraded": False, "reason": "El agente ya está en A0 (mínimo)"}
 
     new_level = LEVEL_ORDER[current_idx - 1]
-    now = datetime.utcnow().isoformat() + "Z"
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     conn.execute(
         "UPDATE autonomy_registry SET current_level=?, effective_since=?, updated_at=? WHERE agent_id=?",
         (new_level, now, now, agent_id),
     )
     conn.execute(
         "INSERT INTO autonomy_events (agent_id,event_type,old_level,new_level,reason,sigma,created_at) VALUES (?,?,?,?,?,?,?)",
-        (agent_id, "DEGRADATION", current, new_level, req.reason, req.sigma_observed, now),
+        (agent_id, "DEGRADE", current, new_level, req.reason, req.sigma_observed, now),
     )
     conn.commit()
     conn.close()
@@ -248,9 +298,11 @@ async def degrade(agent_id: str, req: DegradationRequest):
 @app.post("/v1/autonomy/check", response_model=ActionCheckResponse)
 async def check_action(req: ActionCheckRequest):
     conn = get_db()
-    row = _get_or_init(req.agent_id, conn)
-    current_level = row["current_level"]
-    conn.close()
+    try:
+        row = _get_registered(req.agent_id, conn)
+        current_level = row["current_level"]
+    finally:
+        conn.close()
 
     current_idx = LEVEL_ORDER.index(current_level)
     requested_idx = LEVEL_ORDER.index(req.requested_level) if req.requested_level in LEVEL_ORDER else 0

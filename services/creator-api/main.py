@@ -1,14 +1,13 @@
-"""Creator API — Fábrica de Agentes Gobernados ARHIAX
-Punto de entrada principal: recibe una especificación de agente y devuelve
-un agente completamente registrado, credenciado y listo para operar bajo
-el estándar ARHIAX de gobernanza.
-"""
+"""Creator API for governed ARHIAX agents."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import textwrap
 import uuid
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -16,7 +15,7 @@ from pydantic import BaseModel
 
 app = FastAPI(
     title="ARHIAX Creator API",
-    description="Fábrica de agentes gobernados bajo estándar ARHIAX",
+    description="Factory for governed ARHIAX agents",
     version="1.0.0",
 )
 
@@ -26,11 +25,7 @@ GATEWAY_URL = os.getenv("GATEWAY_URL", "http://gateway:8080")
 HIC_URL = os.getenv("HIC_URL", "http://hic-service:8203")
 CREDENTIAL_BROKER_URL = os.getenv("CREDENTIAL_BROKER_URL", "http://credential-broker:8204")
 
-# CA cert para verificación TLS inter-servicio.
-# None → sin TLS (modo dev). Ruta al ca.crt → verifica con CA interna.
 _CA_CERT = os.getenv("ARHIAX_CA_CERT") or False
-
-# mTLS saliente: presenta cert de cliente si esta configurado.
 _CLIENT_CERT = os.getenv("ARHIAX_TLS_CLIENT_CERT")
 _CLIENT_KEY = os.getenv("ARHIAX_TLS_CLIENT_KEY")
 
@@ -42,10 +37,9 @@ def _mtls_kwargs() -> dict:
     return kwargs
 
 
-# ─── Modelos ────────────────────────────────────────────────────────────────
-
 class AgentSpec(BaseModel):
-    """Especificación completa para crear un agente gobernado."""
+    """Complete specification for a governed agent."""
+
     name: str
     description: str = ""
     department_id: str
@@ -61,13 +55,15 @@ class AgentSpec(BaseModel):
 
 
 class GovernedAgent(BaseModel):
-    """Agente gobernado completamente provisionado."""
+    """Provisioned governed agent."""
+
     agent_id: str
     name: str
     credential: dict
     gateway_url: str
     autonomy_level: str
     bootstrap_code: str
+    bootstrap_config: dict
     security_profile: dict
     status: str = "READY"
 
@@ -78,8 +74,6 @@ class EvaluateRequest(BaseModel):
     context: dict = {}
     requested_autonomy_level: str = "A1"
 
-
-# ─── HTTP client helpers ─────────────────────────────────────────────────────
 
 async def _post(url: str, data: dict) -> dict:
     async with httpx.AsyncClient(timeout=10.0, **_mtls_kwargs()) as client:
@@ -96,8 +90,6 @@ async def _get(url: str) -> dict:
             raise HTTPException(502, f"Error en servicio upstream {url}: {r.text}")
         return r.json()
 
-
-# ─── Bootstrap code generator ───────────────────────────────────────────────
 
 def _default_security_profile(spec: AgentSpec) -> dict:
     return {
@@ -122,52 +114,63 @@ def _merge_security_profile(spec: AgentSpec) -> dict:
     return profile
 
 
-def _generate_bootstrap_code(
-    agent_id: str, credential: dict, gateway_url: str, security_profile: dict
-) -> str:
-    tools_repr = repr(credential.get("permitted_tools", []))
+def _bootstrap_config(agent_id: str, credential: dict, gateway_url: str, security_profile: dict) -> dict:
+    return {
+        "agent_id": agent_id,
+        "gateway_url": gateway_url,
+        "credential_broker_url": CREDENTIAL_BROKER_URL,
+        "autonomy_level": credential.get("autonomy_level", "A0"),
+        "permitted_tools": credential.get("permitted_tools", []),
+        "credential": credential,
+        "security_profile": security_profile,
+    }
+
+
+def _py_literal(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True)
+
+
+def _generate_bootstrap_code(config: dict) -> str:
+    tools_repr = _py_literal(config["permitted_tools"])
+    agent_id = _py_literal(config["agent_id"])
+    gateway_url = _py_literal(config["gateway_url"])
+    autonomy_level = _py_literal(config["autonomy_level"])
+    credential_broker_url = _py_literal(config["credential_broker_url"])
     return textwrap.dedent(f"""
-        # ╔══════════════════════════════════════════════════════════════╗
-        # ║         AGENTE GOBERNADO ARHIAX — {agent_id}
-        # ║         Generado automáticamente por ARHIAX Creator API
-        # ╚══════════════════════════════════════════════════════════════╝
+        # ARHIAX governed agent bootstrap.
+        # Credential and security_profile are in bootstrap_config (returned alongside
+        # this code). Load them from a secrets manager — never hardcode them here.
 
         from arhiax import ARHIAXAgent, governed_tool
 
         class MiAgente(ARHIAXAgent):
-            agent_id = "{agent_id}"
-            gateway_url = "{gateway_url}"
-            autonomy_level = "{credential.get('autonomy_level', 'A0')}"
-            credential_broker_url = "{CREDENTIAL_BROKER_URL}"
+            agent_id = {agent_id}
+            gateway_url = {gateway_url}
+            autonomy_level = {autonomy_level}
+            credential_broker_url = {credential_broker_url}
 
-            # Herramientas permitidas para este agente:
+            # Permitted tools for this agent:
             # {tools_repr}
 
             @governed_tool(action="toolCall", resource="mi_herramienta")
             async def mi_herramienta(self, parametro: str, _arhiax_runtime_auth=None) -> str:
-                # ARHIAX evalúa esta llamada y solicita token efímero al broker.
-                # _arhiax_runtime_auth llega inyectado en runtime y nunca debe
-                # exponerse al prompt, logs ni salida del modelo.
+                # Runtime auth is injected by the SDK and must never be exposed
+                # to prompts, logs, traces, or model-visible output.
                 return f"Resultado: {{parametro}}"
 
             async def run(self, task: str):
-                # invoke_model pasa por gobernanza ARHIAX automáticamente
                 response = await self.invoke_model(prompt=task)
                 return response
 
 
-        # Para iniciar el agente:
+        # Startup example (load credential from your secrets manager):
         # import asyncio
-        # agent = MiAgente(
-        #     credential={repr(credential)},
-        #     security_profile={repr(security_profile)},
-        #     credential_broker_url="http://localhost:8204",
-        # )
-        # asyncio.run(agent.run("Tu tarea aquí"))
+        # credential = secrets_manager.get("arhiax/{agent_id}/credential")
+        # security_profile = secrets_manager.get("arhiax/{agent_id}/security_profile")
+        # agent = MiAgente(credential=credential, security_profile=security_profile)
+        # asyncio.run(agent.run("Tu tarea aqui"))
     """).strip()
 
-
-# ─── Health ─────────────────────────────────────────────────────────────────
 
 @app.get("/healthz")
 async def healthz():
@@ -190,19 +193,10 @@ async def readyz():
     return {"status": "ready", "dependencies": ["aim", "aut", "gateway"]}
 
 
-# ─── Crear agente gobernado ──────────────────────────────────────────────────
-
 @app.post("/v1/agents/create", response_model=GovernedAgent, status_code=201)
 async def create_governed_agent(spec: AgentSpec):
-    """
-    Flujo completo de creación de agente gobernado:
-    1. Registrar en AIM → obtener credencial
-    2. Inicializar en AUT → nivel A0
-    3. Generar código de bootstrap con SDK
-    4. Devolver agente listo para operar
-    """
+    """Create a fully registered, credentialed, governed agent."""
 
-    # Paso 1: Registrar en AIM
     security_profile = _merge_security_profile(spec)
     credential = await _post(f"{AIM_URL}/v1/agents/register", {
         "name": spec.name,
@@ -222,11 +216,10 @@ async def create_governed_agent(spec: AgentSpec):
     security_profile = credential.get("security_profile") or security_profile
     credential["security_profile"] = security_profile
 
-    # Paso 2: Inicializar nivel de autonomía en AUT
-    await _get(f"{AUT_URL}/v1/autonomy/{agent_id}")
+    await _post(f"{AUT_URL}/v1/autonomy/register", {"agent_id": agent_id})
 
-    # Paso 3: Generar código de bootstrap
-    bootstrap = _generate_bootstrap_code(agent_id, credential, GATEWAY_URL, security_profile)
+    bootstrap_cfg = _bootstrap_config(agent_id, credential, GATEWAY_URL, security_profile)
+    bootstrap = _generate_bootstrap_code(bootstrap_cfg)
 
     return GovernedAgent(
         agent_id=agent_id,
@@ -235,12 +228,11 @@ async def create_governed_agent(spec: AgentSpec):
         gateway_url=GATEWAY_URL,
         autonomy_level="A0",
         bootstrap_code=bootstrap,
+        bootstrap_config=bootstrap_cfg,
         security_profile=security_profile,
         status="READY",
     )
 
-
-# ─── Consultar agente ────────────────────────────────────────────────────────
 
 @app.get("/v1/agents/{agent_id}")
 async def get_agent(agent_id: str):
@@ -259,11 +251,9 @@ async def list_agents():
     return await _get(f"{AIM_URL}/v1/agents")
 
 
-# ─── Evaluar acción (test mode) ──────────────────────────────────────────────
-
 @app.post("/v1/agents/{agent_id}/evaluate")
 async def evaluate_action(agent_id: str, req: EvaluateRequest):
-    """Permite probar la evaluación de una acción de un agente sin ejecutarla."""
+    """Evaluate an action for an agent without executing it."""
     result = await _post(f"{GATEWAY_URL}/v1/decide", {
         "subject": agent_id,
         "action": req.action,
@@ -282,20 +272,88 @@ async def evaluate_action(agent_id: str, req: EvaluateRequest):
     }
 
 
-# ─── Dar de baja agente ──────────────────────────────────────────────────────
-
 @app.delete("/v1/agents/{agent_id}")
 async def decommission_agent(agent_id: str, reviewer_id: str = "system"):
     await _post(f"{AIM_URL}/v1/credentials/{agent_id}/revoke", {})
     return {"agent_id": agent_id, "status": "DECOMMISSIONED", "revoked_by": reviewer_id}
 
 
-# ─── Promover autonomía ──────────────────────────────────────────────────────
+class AibomComponent(BaseModel):
+    component_id: str
+    type: str
+    name: str
+    version: str = "1.0"
+    state: str = "ACTIVE"
+    provenance: Dict[str, str] = {}
+
+
+class AibomRecord(BaseModel):
+    aibom_id: str
+    agent_id: str
+    name: str
+    version: str = "1.0"
+    generated_at: str
+    governance_standard: str = "ARHIA-v11.5"
+    autonomy_level: str
+    supervisor_id: str
+    department_id: str
+    authorization_boundary_id: str
+    credential_expires_at: str
+    permitted_tools: List[str]
+    permitted_operations: List[str]
+    permitted_data_scopes: List[str]
+    security_profile: dict
+    components: List[AibomComponent]
+    controls_active: List[str]
+
+
+def _build_aibom(credential: dict) -> AibomRecord:
+    agent_id = credential["agent_id"]
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    aibom_id = f"aibom-{hashlib.sha256(f'{agent_id}:{now}'.encode()).hexdigest()[:16]}"
+
+    components = [
+        AibomComponent(
+            component_id=f"tool-{hashlib.sha256(t.encode()).hexdigest()[:12]}",
+            type="TOOL",
+            name=t,
+            version="1.0",
+            state="ACTIVE",
+            provenance={"source": "arhiax-registry"},
+        )
+        for t in credential.get("permitted_tools", [])
+    ]
+
+    return AibomRecord(
+        aibom_id=aibom_id,
+        agent_id=agent_id,
+        name=credential.get("name", ""),
+        generated_at=now,
+        autonomy_level=credential.get("autonomy_level", "A0"),
+        supervisor_id=credential.get("supervisor_id", ""),
+        department_id=credential.get("department_id", ""),
+        authorization_boundary_id=credential.get("authorization_boundary_id", "default"),
+        credential_expires_at=credential.get("credential_expires_at", ""),
+        permitted_tools=credential.get("permitted_tools", []),
+        permitted_operations=credential.get("permitted_operations", []),
+        permitted_data_scopes=credential.get("permitted_data_scopes", []),
+        security_profile=credential.get("security_profile", {}),
+        components=components,
+        controls_active=["C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08", "C11"],
+    )
+
 
 class PromoteRequest(BaseModel):
     target_level: str
     gates: dict
     justification: str = ""
+
+
+@app.get("/v1/agents/{agent_id}/aibom", response_model=AibomRecord)
+async def get_aibom(agent_id: str):
+    """Genera el AI Bill of Materials (AIBOM) del agente — control C12 / ABO-C01."""
+    credential = await _get(f"{AIM_URL}/v1/credentials/{agent_id}")
+    return _build_aibom(credential)
 
 
 @app.post("/v1/agents/{agent_id}/promote")

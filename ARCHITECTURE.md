@@ -74,9 +74,9 @@ Creator API
   v
 AIM -> credential + security_profile
   |
-  | GET /v1/autonomy/{agent_id}
+  | POST /v1/autonomy/register
   v
-AUT -> A0 baseline
+AUT -> A0 baseline registrado explicitamente
   |
   v
 Creator API -> GovernedAgent response + bootstrap code
@@ -95,7 +95,7 @@ Gateway + OPA
   v
 Credential Broker
   |
-  | 3. Validate AIM credential_hmac, lifecycle, operation, tool/scope/audience
+  | 3. Validate signed agent proof, AIM lifecycle, operation, tool/scope/audience
   v
 JWT ES256 + cnf.jkt
   |
@@ -126,6 +126,13 @@ Token binding dimensions:
 - `context_binding`: resource-specific binding.
 - `cnf.jkt`: DPoP public key thumbprint.
 - `act`: delegation chain for inter-agent calls.
+
+Agent proof:
+
+- `agent_credential_proof` se calcula por request desde el SDK.
+- Incluye `nonce`, `ts`, `agent_id`, `tool_name`, `audience`, `scope` e `invocation_id`.
+- El Broker rechaza nonces repetidos y timestamps fuera de ventana.
+- `agent_credential_hmac` queda como compatibilidad legacy; en produccion se debe exigir `BROKER_REQUIRE_SIGNED_AGENT_PROOF=true`.
 
 ## Gateway security responsibilities
 
@@ -217,6 +224,8 @@ Outcomes:
 | Human step-up | HIC for high-risk or critical flows |
 | Evidence first | Every decision creates audit trail |
 | mTLS internal | Services authenticate over TLS |
+| Safe bootstrap | Creator returns `bootstrap_config` and escaped Python literals |
+| Production proof | Broker requires signed per-request agent proof |
 
 ## Dependencies
 

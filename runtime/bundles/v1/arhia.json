@@ -1,0 +1,147 @@
+{
+  "meta": {
+    "bundleHash": "arhia-v11-4-bundle-sha256-placeholder-000000000000000000000000000000",
+    "deployedAt": "2026-05-13T00:00:00Z",
+    "approvedBy": "Sinergia Consulting Group S.A.S.",
+    "version": "11.4.0"
+  },
+
+  "agents": {
+    "_seed_agent_001": {
+      "autonomyLevel": "A0",
+      "state": "ACTIVE",
+      "departmentScope": "engineering",
+      "supervisorId": "supervisor-seed-001"
+    }
+  },
+
+  "personnel": {
+    "supervisor-seed-001": {
+      "active": true,
+      "canOverride": false,
+      "role": "SUPERVISOR"
+    },
+    "governance-team": {
+      "active": true,
+      "canOverride": true,
+      "role": "GOV"
+    }
+  },
+
+  "departments": {
+    "engineering": {
+      "active": true,
+      "authorizationBoundary": {
+        "name": "engineering-boundary",
+        "allowedActions": [
+          "read", "query", "analyze", "suggest",
+          "toolCall", "modelInvoke", "interAgentCall",
+          "execute", "write", "notify"
+        ]
+      }
+    },
+    "default": {
+      "active": true,
+      "authorizationBoundary": {
+        "name": "default-boundary",
+        "allowedActions": ["read", "query", "toolCall", "modelInvoke"]
+      }
+    }
+  },
+
+  "aim": {
+    "revokedCredentials": {},
+    "restrictedActions": [
+      "override_safety",
+      "modify_policy",
+      "promote_agent",
+      "revoke_credential",
+      "grant_permission"
+    ]
+  },
+
+  "policies": {
+    "toolCall":       { "id": "P-001", "version": "1.0", "defaultVerdict": "ALLOW" },
+    "modelInvoke":    { "id": "P-002", "version": "1.0", "defaultVerdict": "ALLOW" },
+    "dataAccess":     { "id": "P-003", "version": "1.0", "defaultVerdict": "ALLOW" },
+    "interAgentCall": { "id": "P-004", "version": "1.0", "defaultVerdict": "ALLOW" },
+    "read":           { "id": "P-005", "version": "1.0", "defaultVerdict": "ALLOW" },
+    "write":          { "id": "P-006", "version": "1.0", "defaultVerdict": "ALLOW" },
+    "query":          { "id": "P-007", "version": "1.0", "defaultVerdict": "ALLOW" },
+    "notify":         { "id": "P-008", "version": "1.0", "defaultVerdict": "ALLOW" },
+    "delete":         { "id": "P-009", "version": "1.0", "defaultVerdict": "DENY"  },
+    "deploy":         { "id": "P-010", "version": "1.0", "defaultVerdict": "DENY"  },
+    "transfer_funds": { "id": "P-011", "version": "1.0", "defaultVerdict": "DENY"  },
+    "modify_policy":  { "id": "P-012", "version": "1.0", "defaultVerdict": "DENY"  }
+  },
+
+  "actions": {
+    "read":           { "requiredLevel": 0 },
+    "query":          { "requiredLevel": 0 },
+    "analyze":        { "requiredLevel": 1 },
+    "suggest":        { "requiredLevel": 1 },
+    "toolCall":       { "requiredLevel": 1 },
+    "modelInvoke":    { "requiredLevel": 1 },
+    "execute":        { "requiredLevel": 2 },
+    "write":          { "requiredLevel": 2 },
+    "notify":         { "requiredLevel": 2 },
+    "interAgentCall": { "requiredLevel": 2 },
+    "delete":         { "requiredLevel": 3 },
+    "deploy":         { "requiredLevel": 3 },
+    "transfer_funds": { "requiredLevel": 3 },
+    "modify_policy":  { "requiredLevel": 4 },
+    "override_safety":{ "requiredLevel": 4 },
+    "promote_agent":  { "requiredLevel": 4 }
+  },
+
+  "escalation": {
+    "defaultSupervisor": "governance-team",
+    "routing": {
+      "finance": {
+        "CRITICAL": "cfo-team",
+        "HIGH":     "finance-supervisor",
+        "MEDIUM":   "finance-supervisor",
+        "LOW":      "finance-supervisor"
+      },
+      "engineering": {
+        "CRITICAL": "cto-team",
+        "HIGH":     "engineering-supervisor",
+        "MEDIUM":   "engineering-supervisor",
+        "LOW":      "engineering-supervisor"
+      }
+    }
+  },
+
+  "aibom": {
+    "components": {}
+  },
+
+  "compliance": {
+    "frameworkCoverage": {
+      "ARISE":    { "percentComplete": 80.0, "controlsMapped": 12, "controlsTotal": 15 },
+      "OWASP":    { "percentComplete": 85.0, "controlsMapped": 17, "controlsTotal": 20 },
+      "CSA_ATF":  { "percentComplete": 80.0, "controlsMapped": 8,  "controlsTotal": 10 },
+      "MGF":      { "percentComplete": 80.0, "controlsMapped": 4,  "controlsTotal": 5  },
+      "NIST_CSF": { "percentComplete": 82.0, "controlsMapped": 41, "controlsTotal": 50 }
+    },
+    "findings": {}
+  },
+
+  "ega": {
+    "controlEvidenceMap": {
+      "OPA-C01": ["ATT"],
+      "OPA-C04": ["LOG"],
+      "AIM-C01": ["ATT"],
+      "AIM-C02": ["ATT"],
+      "AIM-C03": ["APR"],
+      "ATK-C01": ["ATT"],
+      "DTG-C01": ["LOG"],
+      "HIC-C01": ["APR"],
+      "AUT-C01": ["APR"],
+      "ABO-C01": ["ATT"],
+      "EGA-C01": ["LOG"],
+      "EGA-C03": ["LOG"]
+    },
+    "producedEvidence": {}
+  }
+}

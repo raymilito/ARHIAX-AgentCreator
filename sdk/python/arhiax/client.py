@@ -4,6 +4,9 @@ Comunicación con Gateway, AIM, HIC, BBR y Credential Broker.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import json
 import os
 import time
 import uuid
@@ -251,6 +254,7 @@ class CredentialBrokerClient:
         dpop_jwk: Optional[Dict[str, str]] = None,
         act_chain: Optional[list] = None,
         agent_credential_hmac: Optional[str] = None,
+        agent_credential_proof: Optional[Dict[str, str]] = None,
     ) -> EphemeralToolToken:
         payload = {
             "agent_id": agent_id,
@@ -266,6 +270,8 @@ class CredentialBrokerClient:
             payload["dpop_jwk"] = dpop_jwk
         if act_chain:
             payload["act_chain"] = list(act_chain)
+        if agent_credential_proof:
+            payload["agent_credential_proof"] = dict(agent_credential_proof)
         if agent_credential_hmac:
             payload["agent_credential_hmac"] = agent_credential_hmac
         try:
@@ -275,3 +281,37 @@ class CredentialBrokerClient:
             return EphemeralToolToken(**r.json())
         except httpx.HTTPError as exc:
             raise ARHIAXServiceUnavailable("credential-broker", str(exc))
+
+
+def build_agent_credential_proof(
+    *,
+    parent_chain_hmac: str,
+    agent_id: str,
+    tool_name: str,
+    audience: str,
+    scope: str,
+    invocation_id: str,
+    context_binding: Dict[str, str],
+    ttl_seconds: int,
+    requested_autonomy_level: str,
+    nonce: Optional[str] = None,
+    issued_at: Optional[int] = None,
+) -> Dict[str, str]:
+    """Builds a per-request proof without sending the raw AIM HMAC over HTTP."""
+    issued = str(issued_at if issued_at is not None else int(time.time()))
+    proof_nonce = nonce or uuid.uuid4().hex
+    binding = json.dumps(context_binding, separators=(",", ":"), sort_keys=True)
+    message = "|".join([
+        agent_id,
+        tool_name,
+        audience,
+        scope,
+        invocation_id,
+        str(ttl_seconds),
+        requested_autonomy_level,
+        binding,
+        proof_nonce,
+        issued,
+    ])
+    signature = hmac.new(parent_chain_hmac.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return {"nonce": proof_nonce, "issued_at": issued, "signature": signature}

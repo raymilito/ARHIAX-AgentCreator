@@ -15,9 +15,17 @@ import inspect
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from .client import AIMClient, BBRClient, CredentialBrokerClient, GatewayClient, HICClient
+from .client import (
+    AIMClient,
+    BBRClient,
+    CredentialBrokerClient,
+    GatewayClient,
+    HICClient,
+    build_agent_credential_proof,
+)
 from .dpop import DPoPKey
 from .exceptions import (
     ARHIAXCredentialExpired,
@@ -281,11 +289,33 @@ class ARHIAXAgent:
         self.credential = await self._aim.get_credential(self.agent_id)
         if self.credential.lifecycle_state not in ("ACTIVE", "ROTATING"):
             raise ARHIAXCredentialExpired(self.agent_id, self.credential.lifecycle_state)
+        self._validate_credential_expiry()
         self.autonomy_level = self.credential.autonomy_level
         profile = getattr(self.credential, "security_profile", None)
         if profile:
             self.security_profile = SecurityProfile(**profile)
         return self.credential
+
+    def _validate_credential_expiry(self) -> None:
+        """Validates credential has not expired. Raises ARHIAXCredentialExpired if expired."""
+        if not self.credential or not self.credential.credential_expires_at:
+            return
+        expiry_str = self.credential.credential_expires_at
+        if isinstance(expiry_str, str):
+            try:
+                if expiry_str.endswith('Z'):
+                    expiry_dt = datetime.fromisoformat(expiry_str.replace('Z', '+00:00'))
+                else:
+                    expiry_dt = datetime.fromisoformat(expiry_str)
+            except ValueError:
+                raise ValueError(f"Invalid credential expiry format: {expiry_str}")
+        else:
+            expiry_dt = expiry_str
+        if expiry_dt.tzinfo is None:
+            expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        if now_utc >= expiry_dt:
+            raise ARHIAXCredentialExpired(self.agent_id, "EXPIRED")
 
     # ─── Evaluación de acciones ──────────────────────────────────────────────
 
@@ -325,19 +355,34 @@ class ARHIAXAgent:
         dpop_jwk = (
             self._dpop_key.public_jwk if self.security_profile.require_pop else None
         )
+        context_binding = self._build_context_binding(tool_name, context)
+        parent_hmac = self.credential.parent_chain_hmac if self.credential else None
+        agent_proof = (
+            build_agent_credential_proof(
+                parent_chain_hmac=parent_hmac,
+                agent_id=self.agent_id,
+                tool_name=tool_name,
+                audience=audience,
+                scope=f"tool:execute:{tool_name}",
+                invocation_id=invocation_id,
+                context_binding=context_binding,
+                ttl_seconds=ttl_seconds,
+                requested_autonomy_level=requested_autonomy_level,
+            )
+            if parent_hmac
+            else None
+        )
         return await self._credential_broker.issue_tool_token(
             agent_id=self.agent_id,
             tool_name=tool_name,
             audience=audience,
             scope=f"tool:execute:{tool_name}",
             invocation_id=invocation_id,
-            context_binding=self._build_context_binding(tool_name, context),
+            context_binding=context_binding,
             ttl_seconds=ttl_seconds,
             requested_autonomy_level=requested_autonomy_level,
             dpop_jwk=dpop_jwk,
-            agent_credential_hmac=(
-                self.credential.parent_chain_hmac if self.credential else None
-            ),
+            agent_credential_proof=agent_proof,
         )
 
     def _build_context_binding(self, tool_name: str, context: Dict[str, Any]) -> Dict[str, str]:
@@ -345,17 +390,33 @@ class ARHIAXAgent:
         for key in ("case_id", "property_id", "transaction_id", "resource_id"):
             value = context.get(key)
             if value is not None:
-                binding[key] = str(value)
+                str_value = str(value).strip()
+                if not str_value:
+                    raise ValueError(f"context_binding {key} cannot be empty")
+                if isinstance(value, (str, int, float)):
+                    binding[key] = str_value
+                else:
+                    raise TypeError(f"context_binding {key} must be string/number, got {type(value).__name__}")
         return binding
 
     def _sanitize_tool_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        def _sanitize_value(value: Any, key: str = "") -> Any:
+            key_low = key.lower()
+            if any(marker in key_low for marker in ("token", "authorization", "cookie", "secret", "password")):
+                return "[REDACTED]"
+            if isinstance(value, dict):
+                return {k: _sanitize_value(v, k) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_sanitize_value(item, key) for item in value]
+            if isinstance(value, tuple):
+                return tuple(_sanitize_value(item, key) for item in value)
+            if isinstance(value, str):
+                if any(pattern in value.lower() for pattern in ("authorization:", "bearer ", "set-cookie:", "api_key", "secret=")):
+                    return "[REDACTED]"
+            return value
         cleaned = {}
         for key, value in params.items():
-            low = key.lower()
-            if any(marker in low for marker in ("token", "authorization", "cookie", "secret", "password")):
-                cleaned[key] = "[REDACTED]"
-            else:
-                cleaned[key] = value
+            cleaned[key] = _sanitize_value(value, key)
         return cleaned
 
     def _sanitize_tool_result(self, result: Any) -> Any:
@@ -498,13 +559,17 @@ class ARHIAXAgent:
         requested_autonomy_level: str = "A1",
         severity: str = "MEDIUM",
     ) -> str:
+        if self.credential:
+            self._validate_credential_expiry()
         invocation_id = str(uuid.uuid4())
+        context_binding = self._build_context_binding("invoke_model", {"model": model})
         base_context = {
             "operationType": "modelInvoke",
             "input": {"prompt": prompt, "system": system_prompt},
             "requestedAutonomyLevel": requested_autonomy_level,
             "severity": severity,
             "invocationId": invocation_id,
+            "contextBinding": context_binding,
         }
         decision = await self._evaluate_action(
             action="modelInvoke",
@@ -623,20 +688,35 @@ class ARHIAXAgent:
             if severity.upper() in {"HIGH", "CRITICAL"}
             else self.security_profile.tool_token_ttl_seconds
         )
+        context_binding = {"tool_name": audience}
+        parent_hmac = self.credential.parent_chain_hmac if self.credential else None
+        agent_proof = (
+            build_agent_credential_proof(
+                parent_chain_hmac=parent_hmac,
+                agent_id=self.agent_id,
+                tool_name=audience,
+                audience=audience,
+                scope=f"agent:invoke:{target_agent_id}",
+                invocation_id=invocation_id,
+                context_binding=context_binding,
+                ttl_seconds=ttl_seconds,
+                requested_autonomy_level=self.autonomy_level or "A1",
+            )
+            if parent_hmac
+            else None
+        )
         delegated_token = await self._credential_broker.issue_tool_token(
             agent_id=self.agent_id,
             tool_name=audience,
             audience=audience,
             scope=f"agent:invoke:{target_agent_id}",
             invocation_id=invocation_id,
-            context_binding={"tool_name": audience},
+            context_binding=context_binding,
             ttl_seconds=ttl_seconds,
             requested_autonomy_level=self.autonomy_level or "A1",
             dpop_jwk=dpop_jwk,
             act_chain=chain,
-            agent_credential_hmac=(
-                self.credential.parent_chain_hmac if self.credential else None
-            ),
+            agent_credential_proof=agent_proof,
         )
 
         # 3) Confirmación con token + DPoP (mismo patrón que governed_tool)
